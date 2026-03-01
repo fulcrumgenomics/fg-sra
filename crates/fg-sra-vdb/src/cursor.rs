@@ -188,12 +188,7 @@ impl VCursor {
             )
         };
         check_rc(rc)?;
-        Ok(CellData {
-            elem_bits,
-            base,
-            _boff: boff,
-            row_len,
-        })
+        Ok(CellData { elem_bits, base, _boff: boff, row_len })
     }
 
     /// Get the raw cursor pointer (for passing to PlacementIterator creation).

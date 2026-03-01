@@ -196,10 +196,7 @@ mod tests {
     #[test]
     fn test_output_file() {
         let cli = parse(&["--output-file", "/tmp/out.sam", "SRR123456"]);
-        assert_eq!(
-            cli.output_file.as_deref(),
-            Some(std::path::Path::new("/tmp/out.sam"))
-        );
+        assert_eq!(cli.output_file.as_deref(), Some(std::path::Path::new("/tmp/out.sam")));
     }
 
     #[test]
@@ -245,13 +242,8 @@ mod tests {
 
     #[test]
     fn test_aligned_region() {
-        let cli = parse(&[
-            "--aligned-region",
-            "chr1:1000-2000",
-            "--aligned-region",
-            "chr2",
-            "SRR123456",
-        ]);
+        let cli =
+            parse(&["--aligned-region", "chr1:1000-2000", "--aligned-region", "chr2", "SRR123456"]);
         assert_eq!(cli.aligned_region, vec!["chr1:1000-2000", "chr2"]);
     }
 
@@ -273,10 +265,7 @@ mod tests {
         ]);
         assert!(cli.rna_splicing);
         assert_eq!(cli.rna_splice_level, 2);
-        assert_eq!(
-            cli.rna_splice_log.as_deref(),
-            Some(std::path::Path::new("/tmp/splice.log"))
-        );
+        assert_eq!(cli.rna_splice_log.as_deref(), Some(std::path::Path::new("/tmp/splice.log")));
     }
 
     #[test]

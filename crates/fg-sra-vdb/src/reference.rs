@@ -73,11 +73,7 @@ impl ReferenceList {
     /// Iterate over all references.
     pub fn iter(&self) -> Result<ReferenceIter<'_>, VdbError> {
         let count = self.count()?;
-        Ok(ReferenceIter {
-            reflist: self,
-            idx: 0,
-            count,
-        })
+        Ok(ReferenceIter { reflist: self, idx: 0, count })
     }
 
     #[allow(dead_code)]

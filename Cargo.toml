@@ -9,7 +9,13 @@ members = [
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.85.0"
+repository = "https://github.com/fulcrumgenomics/fg-sratosam"
 license = "MIT"
 
 [workspace.dependencies]
 anyhow = "1"
+
+[profile.release]
+lto = "fat"
+codegen-units = 1

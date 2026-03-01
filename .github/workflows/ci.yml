@@ -1,17 +1,15 @@
-name: CI
+name: Check and Test
 
 on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
 
 env:
   CARGO_TERM_COLOR: always
-  RUSTFLAGS: "-D warnings"
 
 jobs:
-  fmt:
+  format:
     name: rustfmt
     runs-on: ubuntu-latest
     steps:
@@ -19,9 +17,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
-      - run: cargo fmt --all -- --check
+      - run: cargo ci-fmt
 
-  clippy:
+  lint:
     name: clippy
     runs-on: ubuntu-latest
     steps:
@@ -37,10 +35,10 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-clippy-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-lint-${{ hashFiles('**/Cargo.lock') }}
       - name: Install build dependencies
         run: sudo apt-get update && sudo apt-get install -y cmake libxml2-dev
-      - run: cargo clippy --all-features --all-targets -- -D warnings
+      - run: cargo ci-lint
 
   test:
     name: test
@@ -59,4 +57,4 @@ jobs:
           key: ${{ runner.os }}-cargo-test-${{ hashFiles('**/Cargo.lock') }}
       - name: Install build dependencies
         run: sudo apt-get update && sudo apt-get install -y cmake libxml2-dev
-      - run: cargo test --all
+      - run: cargo ci-test

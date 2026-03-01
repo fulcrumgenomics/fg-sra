@@ -2,8 +2,11 @@
 name = "fg-sratosam"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
 license.workspace = true
 description = "High-performance SRA-to-SAM/BAM converter"
+readme = "../../README.md"
 
 [dependencies]
 fg-sra-vdb = { path = "../fg-sra-vdb" }

@@ -1,19 +1,18 @@
 #!/usr/bin/env bash
 # Pre-commit hook: runs rustfmt check and clippy before committing.
-# Install with: cp scripts/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
-# Or run: scripts/install-hooks
+# Install with: ./scripts/install-hooks
 
 set -e
 
 echo "pre-commit: checking rustfmt..."
-if ! cargo fmt --all -- --check 2>/dev/null; then
+if ! cargo ci-fmt 2>/dev/null; then
     echo ""
     echo "ERROR: rustfmt check failed. Run 'cargo fmt --all' to fix."
     exit 1
 fi
 
 echo "pre-commit: checking clippy..."
-if ! cargo clippy --all-features --all-targets -- -D warnings 2>/dev/null; then
+if ! cargo ci-lint 2>/dev/null; then
     echo ""
     echo "ERROR: clippy check failed. Fix the warnings above."
     exit 1

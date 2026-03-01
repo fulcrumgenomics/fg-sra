@@ -105,11 +105,7 @@ impl PlacementSetIterator {
             )
         };
         match check_rc_done(rc)? {
-            Some(()) => Ok(Some(NextReference {
-                first_pos,
-                len,
-                ref_obj,
-            })),
+            Some(()) => Ok(Some(NextReference { first_pos, len, ref_obj })),
             None => Ok(None),
         }
     }

@@ -109,11 +109,7 @@ impl std::error::Error for VdbError {}
 ///
 /// Returns `Ok(())` if `rc == 0`, or `Err(VdbError)` otherwise.
 pub fn check_rc(rc: u32) -> Result<(), VdbError> {
-    if rc == 0 {
-        Ok(())
-    } else {
-        Err(VdbError::new(rc))
-    }
+    if rc == 0 { Ok(()) } else { Err(VdbError::new(rc)) }
 }
 
 /// Convert a `&str` to a `CString`, returning `VdbError::InvalidNulByte` on failure.
@@ -165,9 +161,6 @@ mod tests {
     #[test]
     fn test_to_cstring() {
         assert!(to_cstring("hello").is_ok());
-        assert_eq!(
-            to_cstring("hello\0world").unwrap_err(),
-            VdbError::InvalidNulByte
-        );
+        assert_eq!(to_cstring("hello\0world").unwrap_err(), VdbError::InvalidNulByte);
     }
 }

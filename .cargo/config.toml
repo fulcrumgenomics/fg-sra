@@ -1,0 +1,4 @@
+[alias]
+ci-test = "test --all --locked"
+ci-fmt = "fmt --all -- --check"
+ci-lint = "clippy --all-features --all-targets -- -D warnings"

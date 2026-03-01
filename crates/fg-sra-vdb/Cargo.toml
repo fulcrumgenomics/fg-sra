@@ -2,8 +2,11 @@
 name = "fg-sra-vdb"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
 license.workspace = true
 description = "Safe Rust wrappers over the NCBI VDB C library"
+readme = "../../README.md"
 
 [dependencies]
 fg-sra-vdb-sys = { path = "../fg-sra-vdb-sys" }

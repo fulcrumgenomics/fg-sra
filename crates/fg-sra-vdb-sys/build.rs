@@ -58,10 +58,8 @@ fn build_ncbi_vdb(_out_dir: &Path) -> (PathBuf, PathBuf) {
         .canonicalize()
         .expect("vendor/ncbi-vdb not found; did you initialize the git submodule?");
 
-    let dst = cmake::Config::new(&vdb_src)
-        .define("LIBS_ONLY", "ON")
-        .build_target("ncbi-vdb")
-        .build();
+    let dst =
+        cmake::Config::new(&vdb_src).define("LIBS_ONLY", "ON").build_target("ncbi-vdb").build();
 
     let inc_dir = vdb_src.join("interfaces");
     let build_dir = dst.join("build");
@@ -193,7 +191,5 @@ fn generate_bindings(inc_dir: &Path, out_dir: &Path) {
         .generate()
         .expect("failed to generate FFI bindings");
 
-    bindings
-        .write_to_file(out_dir.join("bindings.rs"))
-        .expect("failed to write bindings");
+    bindings.write_to_file(out_dir.join("bindings.rs")).expect("failed to write bindings");
 }
