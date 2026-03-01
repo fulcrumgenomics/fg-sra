@@ -3,9 +3,9 @@
 //! Provides RAII types with `Drop` implementations, `Result`-based error handling,
 //! and typed column reads for working with SRA/VDB databases.
 
-pub mod error;
-pub mod manager;
-pub mod database;
 pub mod cursor;
-pub mod reference;
+pub mod database;
+pub mod error;
 pub mod iterator;
+pub mod manager;
+pub mod reference;

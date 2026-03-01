@@ -52,9 +52,7 @@ impl AlignMgr {
     /// Create a new `PlacementSetIterator`.
     pub fn make_placement_set_iterator(&self) -> Result<PlacementSetIterator, VdbError> {
         let mut iter: *mut fg_sra_vdb_sys::PlacementSetIterator = ptr::null_mut();
-        let rc = unsafe {
-            fg_sra_vdb_sys::AlignMgrMakePlacementSetIterator(self.ptr, &mut iter)
-        };
+        let rc = unsafe { fg_sra_vdb_sys::AlignMgrMakePlacementSetIterator(self.ptr, &mut iter) };
         check_rc(rc)?;
         Ok(PlacementSetIterator { ptr: iter })
     }
@@ -82,13 +80,9 @@ impl PlacementSetIterator {
     /// Add a placement iterator (for one alignment table on one reference).
     ///
     /// Takes ownership of the `PlacementIterator`.
-    pub fn add_placement_iterator(
-        &mut self,
-        iter: PlacementIterator,
-    ) -> Result<(), VdbError> {
-        let rc = unsafe {
-            fg_sra_vdb_sys::PlacementSetIteratorAddPlacementIterator(self.ptr, iter.ptr)
-        };
+    pub fn add_placement_iterator(&mut self, iter: PlacementIterator) -> Result<(), VdbError> {
+        let rc =
+            unsafe { fg_sra_vdb_sys::PlacementSetIteratorAddPlacementIterator(self.ptr, iter.ptr) };
         // Don't drop the iterator - ownership transferred to the set iterator.
         std::mem::forget(iter);
         check_rc(rc)
@@ -98,9 +92,7 @@ impl PlacementSetIterator {
     ///
     /// Returns `Ok(Some(ref_obj))` with the new reference, or `Ok(None)` when
     /// all references are exhausted.
-    pub fn next_reference(
-        &mut self,
-    ) -> Result<Option<NextReference>, VdbError> {
+    pub fn next_reference(&mut self) -> Result<Option<NextReference>, VdbError> {
         let mut first_pos: i32 = 0;
         let mut len: u32 = 0;
         let mut ref_obj: *const fg_sra_vdb_sys::ReferenceObj = ptr::null();
@@ -113,7 +105,11 @@ impl PlacementSetIterator {
             )
         };
         match check_rc_done(rc)? {
-            Some(()) => Ok(Some(NextReference { first_pos, len, ref_obj })),
+            Some(()) => Ok(Some(NextReference {
+                first_pos,
+                len,
+                ref_obj,
+            })),
             None => Ok(None),
         }
     }
@@ -151,14 +147,10 @@ impl PlacementSetIterator {
     /// Get the next record at the given position.
     ///
     /// Returns `Ok(Some(record))` or `Ok(None)` when no more records at this position.
-    pub fn next_record_at(
-        &mut self,
-        pos: i32,
-    ) -> Result<Option<PlacementRecordRef>, VdbError> {
+    pub fn next_record_at(&mut self, pos: i32) -> Result<Option<PlacementRecordRef>, VdbError> {
         let mut rec: *const fg_sra_vdb_sys::PlacementRecord = ptr::null();
-        let rc = unsafe {
-            fg_sra_vdb_sys::PlacementSetIteratorNextRecordAt(self.ptr, pos, &mut rec)
-        };
+        let rc =
+            unsafe { fg_sra_vdb_sys::PlacementSetIteratorNextRecordAt(self.ptr, pos, &mut rec) };
         match check_rc_done(rc)? {
             Some(()) if rec.is_null() => Ok(None),
             Some(()) => Ok(Some(PlacementRecordRef { ptr: rec })),
@@ -277,13 +269,13 @@ impl PlacementIterator {
                 ref_window_start,
                 ref_window_len,
                 min_mapq,
-                ptr::null(),       // ref_cursor (NULL = use internal)
+                ptr::null(), // ref_cursor (NULL = use internal)
                 align_cursor.as_ptr(),
                 id_src as u8,
-                ptr::null(),       // ext_0
-                ptr::null(),       // ext_1
-                ptr::null(),       // rd_group filter
-                ptr::null_mut(),   // placement_ctx
+                ptr::null(),     // ext_0
+                ptr::null(),     // ext_1
+                ptr::null(),     // rd_group filter
+                ptr::null_mut(), // placement_ctx
             )
         };
         check_rc(rc)?;
@@ -302,5 +294,38 @@ impl Drop for PlacementIterator {
         if !self.ptr.is_null() {
             unsafe { fg_sra_vdb_sys::PlacementIteratorRelease(self.ptr) };
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_align_id_src_values() {
+        assert_eq!(AlignIdSrc::Primary as u8, 0);
+        assert_eq!(AlignIdSrc::Secondary as u8, 1);
+        assert_eq!(AlignIdSrc::Evidence as u8, 2);
+    }
+
+    #[test]
+    fn test_check_rc_done_success() {
+        let result = check_rc_done(0).unwrap();
+        assert_eq!(result, Some(()));
+    }
+
+    #[test]
+    fn test_check_rc_done_done() {
+        // state=1 (rcDone) is "done", not an error.
+        let result = check_rc_done(1).unwrap();
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_check_rc_done_error() {
+        // A non-zero rc with state != rcDone is a real error.
+        let rc = (1 << 27) | (1 << 6) | 2; // state=2, not done
+        let result = check_rc_done(rc);
+        assert!(result.is_err());
     }
 }

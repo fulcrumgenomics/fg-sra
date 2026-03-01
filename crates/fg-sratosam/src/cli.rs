@@ -17,7 +17,6 @@ pub struct Cli {
     pub accessions: Vec<String>,
 
     // ── Core options ──────────────────────────────────────────────────
-
     /// Output unaligned reads along with aligned reads.
     #[arg(short = 'u', long = "unaligned")]
     pub unaligned: bool,
@@ -59,7 +58,6 @@ pub struct Cli {
     pub unaligned_spots_only: bool,
 
     // ── Output options ────────────────────────────────────────────────
-
     /// Write to file instead of stdout.
     #[arg(long = "output-file")]
     pub output_file: Option<PathBuf>,
@@ -89,7 +87,6 @@ pub struct Cli {
     pub omit_quality: bool,
 
     // ── Formatting options ────────────────────────────────────────────
-
     /// Use long CIGAR form.
     #[arg(short = 'c', long = "cigar-long")]
     pub cigar_long: bool,
@@ -135,7 +132,6 @@ pub struct Cli {
     pub rna_splice_log: Option<PathBuf>,
 
     // ── Performance options ───────────────────────────────────────────
-
     /// Number of worker threads (default: available cores).
     #[arg(short = 't', long = "threads")]
     pub threads: Option<usize>,
@@ -153,5 +149,180 @@ impl Cli {
     pub fn execute(&self) -> Result<()> {
         // TODO: implement conversion pipeline
         anyhow::bail!("not yet implemented")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::Parser;
+
+    use super::*;
+
+    /// Parse a CLI from a slice of arguments (program name auto-prepended).
+    fn parse(args: &[&str]) -> Cli {
+        let mut full = vec!["fg-sratosam"];
+        full.extend_from_slice(args);
+        Cli::parse_from(full)
+    }
+
+    #[test]
+    fn test_minimal_args() {
+        let cli = parse(&["SRR123456"]);
+        assert_eq!(cli.accessions, vec!["SRR123456"]);
+        assert!(!cli.unaligned);
+        assert!(!cli.primary);
+        assert_eq!(cli.output_format, OutputFormat::Sam);
+    }
+
+    #[test]
+    fn test_multiple_accessions() {
+        let cli = parse(&["SRR111", "SRR222", "SRR333"]);
+        assert_eq!(cli.accessions, vec!["SRR111", "SRR222", "SRR333"]);
+    }
+
+    #[test]
+    fn test_primary_and_unaligned() {
+        let cli = parse(&["-1", "-u", "SRR123456"]);
+        assert!(cli.primary);
+        assert!(cli.unaligned);
+    }
+
+    #[test]
+    fn test_bam_output_format() {
+        let cli = parse(&["--output-format", "bam", "SRR123456"]);
+        assert_eq!(cli.output_format, OutputFormat::Bam);
+    }
+
+    #[test]
+    fn test_output_file() {
+        let cli = parse(&["--output-file", "/tmp/out.sam", "SRR123456"]);
+        assert_eq!(
+            cli.output_file.as_deref(),
+            Some(std::path::Path::new("/tmp/out.sam"))
+        );
+    }
+
+    #[test]
+    fn test_compression_flags() {
+        let cli = parse(&["--gzip", "SRR123456"]);
+        assert!(cli.gzip);
+        assert!(!cli.bzip2);
+
+        let cli = parse(&["--bzip2", "SRR123456"]);
+        assert!(!cli.gzip);
+        assert!(cli.bzip2);
+    }
+
+    #[test]
+    fn test_cigar_and_formatting() {
+        let cli = parse(&[
+            "--cigar-long",
+            "--hide-identical",
+            "--spot-group",
+            "--prefix",
+            "PRE",
+            "SRR123456",
+        ]);
+        assert!(cli.cigar_long);
+        assert!(cli.hide_identical);
+        assert!(cli.spot_group);
+        assert_eq!(cli.prefix.as_deref(), Some("PRE"));
+    }
+
+    #[test]
+    fn test_header_options() {
+        let cli = parse(&[
+            "--no-header",
+            "--header-comment",
+            "line one",
+            "--header-comment",
+            "line two",
+            "SRR123456",
+        ]);
+        assert!(cli.no_header);
+        assert_eq!(cli.header_comment, vec!["line one", "line two"]);
+    }
+
+    #[test]
+    fn test_aligned_region() {
+        let cli = parse(&[
+            "--aligned-region",
+            "chr1:1000-2000",
+            "--aligned-region",
+            "chr2",
+            "SRR123456",
+        ]);
+        assert_eq!(cli.aligned_region, vec!["chr1:1000-2000", "chr2"]);
+    }
+
+    #[test]
+    fn test_min_mapq() {
+        let cli = parse(&["--min-mapq", "30", "SRR123456"]);
+        assert_eq!(cli.min_mapq, Some(30));
+    }
+
+    #[test]
+    fn test_rna_splicing() {
+        let cli = parse(&[
+            "--rna-splicing",
+            "--rna-splice-level",
+            "2",
+            "--rna-splice-log",
+            "/tmp/splice.log",
+            "SRR123456",
+        ]);
+        assert!(cli.rna_splicing);
+        assert_eq!(cli.rna_splice_level, 2);
+        assert_eq!(
+            cli.rna_splice_log.as_deref(),
+            Some(std::path::Path::new("/tmp/splice.log"))
+        );
+    }
+
+    #[test]
+    fn test_qual_quant() {
+        let cli = parse(&["--qual-quant", "1:10,10:20,20:30,30:40", "SRR123456"]);
+        assert_eq!(cli.qual_quant.as_deref(), Some("1:10,10:20,20:30,30:40"));
+    }
+
+    #[test]
+    fn test_threads() {
+        let cli = parse(&["-t", "8", "SRR123456"]);
+        assert_eq!(cli.threads, Some(8));
+    }
+
+    #[test]
+    fn test_fasta_fastq() {
+        let cli = parse(&["--fasta", "SRR123456"]);
+        assert!(cli.fasta);
+        assert!(!cli.fastq);
+
+        let cli = parse(&["--fastq", "SRR123456"]);
+        assert!(!cli.fasta);
+        assert!(cli.fastq);
+    }
+
+    #[test]
+    fn test_short_flags() {
+        let cli = parse(&["-n", "-r", "-s", "-c", "-g", "-o", "-t", "4", "SRR123456"]);
+        assert!(cli.no_header);
+        assert!(cli.header);
+        assert!(cli.seqid);
+        assert!(cli.cigar_long);
+        assert!(cli.spot_group);
+        assert!(cli.omit_quality);
+        assert_eq!(cli.threads, Some(4));
+    }
+
+    #[test]
+    fn test_missing_accession_fails() {
+        let result = Cli::try_parse_from(["fg-sratosam"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_default_rna_splice_level() {
+        let cli = parse(&["SRR123456"]);
+        assert_eq!(cli.rna_splice_level, 0);
     }
 }

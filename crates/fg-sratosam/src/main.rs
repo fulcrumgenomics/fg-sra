@@ -1,15 +1,15 @@
 //! fg-sratosam: High-performance SRA-to-SAM/BAM converter.
 
+mod aligned;
+mod cigar;
 mod cli;
 mod header;
-mod aligned;
-mod unaligned;
 mod matecache;
-mod record;
-mod output;
-mod cigar;
-mod quality;
 mod md_tag;
+mod output;
+mod quality;
+mod record;
+mod unaligned;
 
 use anyhow::Result;
 use clap::Parser;

@@ -22,11 +22,7 @@ impl ReferenceList {
     ///
     /// - `options`: bitmask of options (0 for defaults)
     /// - `cache`: cursor cache size in bytes (0 for default)
-    pub fn make_database(
-        db: &VDatabase,
-        options: u32,
-        cache: usize,
-    ) -> Result<Self, VdbError> {
+    pub fn make_database(db: &VDatabase, options: u32, cache: usize) -> Result<Self, VdbError> {
         let mut reflist: *const fg_sra_vdb_sys::ReferenceList = ptr::null();
         let rc = unsafe {
             fg_sra_vdb_sys::ReferenceList_MakeDatabase(
@@ -77,7 +73,11 @@ impl ReferenceList {
     /// Iterate over all references.
     pub fn iter(&self) -> Result<ReferenceIter<'_>, VdbError> {
         let count = self.count()?;
-        Ok(ReferenceIter { reflist: self, idx: 0, count })
+        Ok(ReferenceIter {
+            reflist: self,
+            idx: 0,
+            count,
+        })
     }
 
     #[allow(dead_code)]
@@ -174,9 +174,7 @@ impl Drop for ReferenceObj {
 /// Get the name from a raw `ReferenceObj` pointer.
 ///
 /// Shared by `ReferenceObj::name()` and `NextReference::ref_name()`.
-pub(crate) fn ref_obj_name(
-    ptr: *const fg_sra_vdb_sys::ReferenceObj,
-) -> Result<String, VdbError> {
+pub(crate) fn ref_obj_name(ptr: *const fg_sra_vdb_sys::ReferenceObj) -> Result<String, VdbError> {
     let mut name: *const std::os::raw::c_char = ptr::null();
     let rc = unsafe { fg_sra_vdb_sys::ReferenceObj_Name(ptr, &mut name) };
     check_rc(rc)?;
@@ -190,9 +188,7 @@ pub(crate) fn ref_obj_name(
 /// Get the sequence ID from a raw `ReferenceObj` pointer.
 ///
 /// Shared by `ReferenceObj::seq_id()` and `NextReference::seq_id()`.
-pub(crate) fn ref_obj_seq_id(
-    ptr: *const fg_sra_vdb_sys::ReferenceObj,
-) -> Result<String, VdbError> {
+pub(crate) fn ref_obj_seq_id(ptr: *const fg_sra_vdb_sys::ReferenceObj) -> Result<String, VdbError> {
     let mut seqid: *const std::os::raw::c_char = ptr::null();
     let rc = unsafe { fg_sra_vdb_sys::ReferenceObj_SeqId(ptr, &mut seqid) };
     check_rc(rc)?;

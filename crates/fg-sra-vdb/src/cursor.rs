@@ -58,7 +58,8 @@ impl VCursor {
     pub fn id_range(&self, col_idx: u32) -> Result<(i64, u64), VdbError> {
         let mut first: i64 = 0;
         let mut count: u64 = 0;
-        let rc = unsafe { fg_sra_vdb_sys::VCursorIdRange(self.ptr, col_idx, &mut first, &mut count) };
+        let rc =
+            unsafe { fg_sra_vdb_sys::VCursorIdRange(self.ptr, col_idx, &mut first, &mut count) };
         check_rc(rc)?;
         Ok((first, count))
     }
@@ -94,8 +95,7 @@ impl VCursor {
             return Ok(Vec::new());
         }
         debug_assert_eq!(data.elem_bits, expected_bits);
-        let values =
-            unsafe { slice::from_raw_parts(data.base as *const T, data.row_len as usize) };
+        let values = unsafe { slice::from_raw_parts(data.base as *const T, data.row_len as usize) };
         Ok(values.to_vec())
     }
 
@@ -134,8 +134,7 @@ impl VCursor {
             return Ok(String::new());
         }
         debug_assert_eq!(data.elem_bits, 8);
-        let bytes =
-            unsafe { slice::from_raw_parts(data.base as *const u8, data.row_len as usize) };
+        let bytes = unsafe { slice::from_raw_parts(data.base as *const u8, data.row_len as usize) };
         Ok(String::from_utf8_lossy(bytes).into_owned())
     }
 
@@ -189,7 +188,12 @@ impl VCursor {
             )
         };
         check_rc(rc)?;
-        Ok(CellData { elem_bits, base, _boff: boff, row_len })
+        Ok(CellData {
+            elem_bits,
+            base,
+            _boff: boff,
+            row_len,
+        })
     }
 
     /// Get the raw cursor pointer (for passing to PlacementIterator creation).

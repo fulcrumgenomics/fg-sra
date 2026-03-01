@@ -26,9 +26,8 @@ impl VDatabase {
     pub fn open_table_read(&self, name: &str) -> Result<VTable, VdbError> {
         let c_name = to_cstring(name)?;
         let mut tbl: *const fg_sra_vdb_sys::VTable = ptr::null();
-        let rc = unsafe {
-            fg_sra_vdb_sys::VDatabaseOpenTableRead(self.ptr, &mut tbl, c_name.as_ptr())
-        };
+        let rc =
+            unsafe { fg_sra_vdb_sys::VDatabaseOpenTableRead(self.ptr, &mut tbl, c_name.as_ptr()) };
         check_rc(rc)?;
         Ok(VTable::from_raw(tbl))
     }
@@ -93,9 +92,8 @@ impl VTable {
     /// Create a cached read cursor with the given cache capacity in bytes.
     pub fn create_cached_cursor_read(&self, capacity: usize) -> Result<VCursor, VdbError> {
         let mut curs: *const fg_sra_vdb_sys::VCursor = ptr::null();
-        let rc = unsafe {
-            fg_sra_vdb_sys::VTableCreateCachedCursorRead(self.ptr, &mut curs, capacity)
-        };
+        let rc =
+            unsafe { fg_sra_vdb_sys::VTableCreateCachedCursorRead(self.ptr, &mut curs, capacity) };
         check_rc(rc)?;
         Ok(VCursor::from_raw(curs))
     }
@@ -134,9 +132,8 @@ impl KMetadata {
     pub fn open_node_read(&self, path: &str) -> Result<KMDataNode, VdbError> {
         let c_path = to_cstring(path)?;
         let mut node: *const fg_sra_vdb_sys::KMDataNode = ptr::null();
-        let rc = unsafe {
-            fg_sra_vdb_sys::KMetadataOpenNodeRead(self.ptr, &mut node, c_path.as_ptr())
-        };
+        let rc =
+            unsafe { fg_sra_vdb_sys::KMetadataOpenNodeRead(self.ptr, &mut node, c_path.as_ptr()) };
         check_rc(rc)?;
         Ok(KMDataNode { ptr: node })
     }
