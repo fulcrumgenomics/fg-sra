@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::Parser;
 
 /// High-performance SRA-to-SAM/BAM converter.
@@ -147,8 +147,67 @@ pub enum OutputFormat {
 impl Cli {
     /// Run the conversion with the parsed CLI options.
     pub fn execute(&self) -> Result<()> {
-        // TODO: implement conversion pipeline
-        anyhow::bail!("not yet implemented")
+        for accession in &self.accessions {
+            self.process_accession(accession)?;
+        }
+        Ok(())
+    }
+
+    /// Process a single SRA accession or file path.
+    fn process_accession(&self, accession: &str) -> Result<()> {
+        use fg_sra_vdb::manager::VdbManager;
+
+        use crate::aligned::process_aligned_table;
+        use crate::header::generate_header;
+        use crate::output::OutputWriter;
+        use crate::record::FormatOptions;
+        use crate::unaligned::process_unaligned_reads;
+
+        let mgr = VdbManager::make_read().context("failed to create VDB manager")?;
+        mgr.disable_pagemap_thread().ok(); // Best-effort; ignore failure.
+
+        let db = mgr
+            .open_db_read(accession)
+            .with_context(|| format!("failed to open database: {accession}"))?;
+
+        let mut writer = match &self.output_file {
+            Some(path) => OutputWriter::from_path(path)?,
+            None => OutputWriter::stdout(),
+        };
+
+        // Header.
+        if !self.no_header {
+            let header = generate_header(&db, self.header, self.seqid, &self.header_comment)?;
+            writer.write_header(&header)?;
+        }
+
+        let opts = FormatOptions {
+            prefix: self.prefix.as_deref(),
+            spot_group_in_name: self.spot_group,
+            xi_tag: self.xi_tag,
+            reverse_unaligned: self.reverse,
+        };
+
+        // Aligned reads (unless --unaligned-spots-only).
+        if !self.unaligned_spots_only {
+            process_aligned_table(
+                &db,
+                &mut writer,
+                self.seqid,
+                self.cigar_long,
+                self.primary,
+                self.min_mapq,
+                &opts,
+            )?;
+        }
+
+        // Unaligned reads (if requested).
+        if self.unaligned || self.unaligned_spots_only {
+            process_unaligned_reads(&db, &mut writer, &opts, self.unaligned_spots_only)?;
+        }
+
+        writer.finish()?;
+        Ok(())
     }
 }
 

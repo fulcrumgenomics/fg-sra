@@ -33,3 +33,6 @@ Session.vim
 # Local notes
 /notes/
 /plans/
+
+# Benchmark
+/benchmark/
