@@ -182,6 +182,7 @@ impl ToSam {
         use crate::aligned::{AlignConfig, process_aligned_table};
         use crate::header::generate_header;
         use crate::output::OutputWriter;
+        use crate::progress::ProgressLogger;
         use crate::record::FormatOptions;
         use crate::unaligned::process_unaligned_reads;
 
@@ -221,14 +222,23 @@ impl ToSam {
             opts: &opts,
         };
 
+        const PROGRESS_INTERVAL: u64 = 1_000_000;
+
         // Aligned reads (unless --unaligned-spots-only).
         if !self.unaligned_spots_only {
-            process_aligned_table(&db, &mut writer, &align_config)?;
+            process_aligned_table(&db, &mut writer, &align_config, PROGRESS_INTERVAL)?;
         }
 
         // Unaligned reads (if requested).
         if self.unaligned || self.unaligned_spots_only {
-            process_unaligned_reads(&db, &mut writer, &opts, self.unaligned_spots_only)?;
+            let unaligned_progress = ProgressLogger::new(0, PROGRESS_INTERVAL);
+            process_unaligned_reads(
+                &db,
+                &mut writer,
+                &opts,
+                self.unaligned_spots_only,
+                &unaligned_progress,
+            )?;
         }
 
         writer.finish()?;

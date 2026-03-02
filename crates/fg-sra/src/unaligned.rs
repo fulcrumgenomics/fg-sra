@@ -8,6 +8,7 @@ use fg_sra_vdb::cursor::VCursor;
 use fg_sra_vdb::database::VDatabase;
 
 use crate::output::OutputWriter;
+use crate::progress::ProgressLogger;
 use crate::record::{
     FormatOptions, READ_TYPE_BIOLOGICAL, UnalignedColumns, format_unaligned_record,
 };
@@ -72,6 +73,7 @@ pub fn process_unaligned_reads(
     writer: &mut OutputWriter,
     opts: &FormatOptions<'_>,
     unaligned_spots_only: bool,
+    progress: &ProgressLogger,
 ) -> Result<()> {
     let (cursor, idx) = setup_seq_cursor(db)?;
 
@@ -148,9 +150,11 @@ pub fn process_unaligned_reads(
 
             format_unaligned_record(&mut buf, &cols, opts);
             writer.write_bytes(&buf)?;
+            progress.record(1);
         }
     }
 
+    progress.complete();
     Ok(())
 }
 

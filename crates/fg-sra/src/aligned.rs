@@ -15,10 +15,15 @@ use fg_sra_vdb::reference::{ReferenceList, reflist_options};
 
 use crate::matecache::{MateCache, MateInfo};
 use crate::output::OutputWriter;
+use crate::progress::ProgressLogger;
 use crate::record::{AlignedColumns, FormatOptions, format_aligned_record};
 
 /// Configuration for aligned read processing, bundling CLI-derived options
 /// that are threaded through multiple functions.
+/// Maximum number of simultaneously open VDB resource sets (cursors + ReferenceLists).
+/// Bounds peak memory in multi-threaded mode to `MAX_OPEN_RESOURCE_SETS × per-set cost`.
+const MAX_OPEN_RESOURCE_SETS: usize = 2;
+
 pub struct AlignConfig<'a> {
     pub use_seqid: bool,
     pub use_long_cigar: bool,
@@ -41,6 +46,13 @@ impl AlignConfig<'_> {
     /// Convert `min_mapq` to the `i32` expected by the VDB placement API.
     fn min_mapq_i32(&self) -> i32 {
         self.min_mapq.map(|m| m as i32).unwrap_or(0)
+    }
+
+    /// Compute the bounded resource pool size: `min(MAX_OPEN_RESOURCE_SETS, effective_threads)`,
+    /// clamped to at least 1.
+    fn pool_size(&self, num_work_items: usize) -> usize {
+        let effective = self.num_threads.min(num_work_items);
+        MAX_OPEN_RESOURCE_SETS.min(effective).max(1)
     }
 }
 
@@ -147,31 +159,62 @@ fn read_aligned_columns(
     Ok(())
 }
 
+/// Scan reference metadata and build work items, skipping zero-length references.
+fn collect_work_items(reflist: &ReferenceList, ref_count: u32) -> Result<Vec<WorkItem>> {
+    let mut work_items = Vec::with_capacity(ref_count as usize);
+    for i in 0..ref_count {
+        let ref_obj = reflist.get(i).context("failed to get reference")?;
+        let ref_len = ref_obj.seq_length().context("failed to get reference length")?;
+        if ref_len == 0 {
+            continue;
+        }
+        let order_idx = work_items.len();
+        work_items.push(WorkItem { order_idx, ref_idx: i, ref_len });
+    }
+    Ok(work_items)
+}
+
 /// Process all aligned reads for one alignment table, writing SAM records.
 ///
 /// When `num_threads > 1`, references are processed in parallel across worker
-/// threads, each with its own VDB cursor.  When `num_threads <= 1`, the existing
+/// threads using a bounded resource pool.  When `num_threads <= 1`, the
 /// sequential path is used (no threading overhead).
 pub fn process_aligned_table(
     db: &VDatabase,
     writer: &mut OutputWriter,
     config: &AlignConfig<'_>,
+    progress_interval: u64,
 ) -> Result<()> {
-    let reflist = ReferenceList::make_database(db, config.reflist_opts(), 0)
-        .context("failed to create ReferenceList")?;
-    let ref_count = reflist.count().context("failed to get reference count")?;
-    if ref_count == 0 {
+    // Build work items in a block scope so the ReferenceList is dropped
+    // before we create per-worker resource sets, avoiding N+1 ReferenceLists.
+    let work_items = {
+        let reflist = ReferenceList::make_database(db, config.reflist_opts(), 0)
+            .context("failed to create ReferenceList")?;
+        let ref_count = reflist.count().context("failed to get reference count")?;
+        collect_work_items(&reflist, ref_count)?
+        // reflist dropped here
+    };
+
+    if work_items.is_empty() {
         return Ok(());
     }
+
+    let progress = ProgressLogger::new(work_items.len() as u32, progress_interval);
 
     // Dispatch to sequential or parallel processing per table.
     let mut process_table = |table_name: &str, id_src: AlignIdSrc| -> Result<()> {
         if config.num_threads <= 1 {
-            process_alignment_table_with_id_src(
-                db, table_name, &reflist, ref_count, writer, config, id_src,
+            process_alignment_table_sequential(
+                db,
+                table_name,
+                &work_items,
+                writer,
+                config,
+                id_src,
+                &progress,
             )
         } else {
-            process_table_parallel(db, table_name, &reflist, ref_count, writer, config, id_src)
+            process_table_parallel(db, table_name, &work_items, writer, config, id_src, &progress)
         }
     };
 
@@ -180,51 +223,77 @@ pub fn process_aligned_table(
         process_table(AlignIdSrc::Secondary.table_name(), AlignIdSrc::Secondary)?;
     }
 
+    progress.complete();
     Ok(())
 }
 
-/// Process a single alignment table (primary or secondary).
-fn process_alignment_table_with_id_src(
+/// Process a single alignment table sequentially, one reference at a time.
+///
+/// Creates a fresh `PlacementSetIterator` per reference (matching the parallel
+/// path's per-reference approach) to avoid loading all reference alignment ID
+/// arrays simultaneously.
+fn process_alignment_table_sequential(
     db: &VDatabase,
     table_name: &str,
-    reflist: &ReferenceList,
-    ref_count: u32,
+    work_items: &[WorkItem],
     writer: &mut OutputWriter,
     config: &AlignConfig<'_>,
     id_src: AlignIdSrc,
+    progress: &ProgressLogger,
 ) -> Result<()> {
     let (cursor, col_idx) = setup_align_cursor(db, table_name, config.use_long_cigar)?;
+    let reflist = ReferenceList::make_database(db, config.reflist_opts(), 0)
+        .context("failed to create ReferenceList")?;
     let min_mapq = config.min_mapq_i32();
-
     let align_mgr = AlignMgr::make_read().context("failed to create AlignMgr")?;
-    let mut psi =
-        align_mgr.make_placement_set_iterator().context("failed to create PlacementSetIterator")?;
 
-    for i in 0..ref_count {
-        let ref_obj = reflist.get(i).context("failed to get reference")?;
-        let ref_len = ref_obj.seq_length().context("failed to get reference length")?;
+    let ctx = EmitContext {
+        cursor: &cursor,
+        col_idx: &col_idx,
+        use_seqid: config.use_seqid,
+        opts: config.opts,
+    };
+    let mut record_buf = Vec::with_capacity(1024);
+    let mut mate_cache = MateCache::new();
+    let mut cols = AlignedColumns::new();
 
-        // Skip zero-length references (the VDB API requires ref_window_len >= 1).
-        if ref_len == 0 {
-            continue;
-        }
+    for item in work_items {
+        let ref_obj = reflist.get(item.ref_idx).context("failed to get reference")?;
 
-        // PlacementIterator::make returns rcDone for references with no alignments
-        // in this table (e.g. unplaced contigs). Skip those gracefully.
-        let pi = match PlacementIterator::make(&ref_obj, 0, ref_len, min_mapq, &cursor, id_src) {
+        let pi = match PlacementIterator::make(&ref_obj, 0, item.ref_len, min_mapq, &cursor, id_src)
+        {
             Ok(pi) => pi,
-            Err(e) if e.is_done() => continue,
+            Err(e) if e.is_done() => {
+                progress.reference_done();
+                continue;
+            }
             Err(e) => return Err(e).context("failed to create PlacementIterator"),
         };
-        // add_placement_iterator returns Ok(false) when the iterator has no
-        // placements (rcDone), matching sam-dump's behavior of continuing.
+
+        let mut psi = align_mgr
+            .make_placement_set_iterator()
+            .context("failed to create PlacementSetIterator")?;
         match psi.add_placement_iterator(pi) {
             Ok(_) => {}
             Err(e) => return Err(e).context("failed to add PlacementIterator"),
         }
+
+        emit_placement_records(
+            &mut psi,
+            &ctx,
+            &mut record_buf,
+            &mut mate_cache,
+            &mut cols,
+            |rec| {
+                progress.record(1);
+                writer.write_bytes(rec)
+            },
+        )?;
+        progress.reference_done();
+        // psi + pi dropped here, freeing per-reference alignment ID arrays
     }
 
-    process_placement_set(&mut psi, &cursor, &col_idx, writer, config.use_seqid, config.opts)
+    Ok(())
 }
 
 /// Shared read-only context for emitting aligned records.
@@ -236,24 +305,6 @@ struct EmitContext<'a> {
     col_idx: &'a AlignColumnIndices,
     use_seqid: bool,
     opts: &'a FormatOptions<'a>,
-}
-
-/// Walk a PlacementSetIterator and write SAM records to the output.
-fn process_placement_set(
-    psi: &mut PlacementSetIterator,
-    cursor: &VCursor,
-    col_idx: &AlignColumnIndices,
-    writer: &mut OutputWriter,
-    use_seqid: bool,
-    opts: &FormatOptions<'_>,
-) -> Result<()> {
-    let ctx = EmitContext { cursor, col_idx, use_seqid, opts };
-    let mut buf = Vec::with_capacity(1024);
-    let mut mate_cache = MateCache::new();
-    let mut cols = AlignedColumns::new();
-    emit_placement_records(psi, &ctx, &mut buf, &mut mate_cache, &mut cols, |rec| {
-        writer.write_bytes(rec)
-    })
 }
 
 /// Walk a PlacementSetIterator and emit formatted SAM records via the `emit` callback.
@@ -320,6 +371,7 @@ fn emit_placement_records(
 const CHUNK_SIZE: usize = 8 * 1024 * 1024; // 8 MB
 
 /// A unit of work sent to a worker thread: one reference to process.
+#[derive(Clone, Copy)]
 struct WorkItem {
     /// Contiguous index into the filtered work list, used for ordered output.
     order_idx: usize,
@@ -341,80 +393,76 @@ struct ResultChunk {
     is_last: bool,
 }
 
+/// VDB resource set: cursor + column indices + ReferenceList.
+/// Checked out from the bounded pool by workers, returned after processing.
+struct ResourceSet {
+    cursor: VCursor,
+    col_idx: AlignColumnIndices,
+    reflist: ReferenceList,
+}
+
 /// Process one alignment table in parallel across worker threads.
 ///
-/// Pre-creates one VDB cursor per worker, distributes references via a work
-/// channel, and collects chunked results in reference order.
+/// Creates a bounded pool of K VDB resource sets (K = `pool_size`), distributes
+/// references via a work channel, and collects chunked results in reference order.
+/// Workers check out a resource set for each reference and return it when done,
+/// bounding peak VDB memory to K × per-set cost.
 fn process_table_parallel(
     db: &VDatabase,
     table_name: &str,
-    reflist: &ReferenceList,
-    ref_count: u32,
+    work_items: &[WorkItem],
     writer: &mut OutputWriter,
     config: &AlignConfig<'_>,
     id_src: AlignIdSrc,
+    progress: &ProgressLogger,
 ) -> Result<()> {
-    // Pre-scan reference metadata to build work items (skip zero-length refs).
-    // We only need ref_idx and ref_len; actual ReferenceObj instances are
-    // created per-worker to avoid sharing VDB internal state across threads.
-    let mut work_items = Vec::with_capacity(ref_count as usize);
-    for i in 0..ref_count {
-        let ref_obj = reflist.get(i).context("failed to get reference")?;
-        let ref_len = ref_obj.seq_length().context("failed to get reference length")?;
-        if ref_len == 0 {
-            continue;
-        }
-        let order_idx = work_items.len();
-        work_items.push(WorkItem { order_idx, ref_idx: i, ref_len });
-    }
-
-    if work_items.is_empty() {
-        return Ok(());
-    }
-
-    // Pre-create per-worker resources on the main thread: each worker gets
-    // its own cursor AND its own ReferenceList.  ReferenceObj pointers share
-    // internal VDB state with their parent ReferenceList, so concurrent
-    // access from different threads requires independent lists.
     let effective_threads = config.num_threads.min(work_items.len());
+    let pool_size = config.pool_size(work_items.len());
     let reflist_opts = config.reflist_opts();
-    let worker_resources: Vec<(VCursor, AlignColumnIndices, ReferenceList)> = (0
-        ..effective_threads)
-        .map(|_| {
-            let (cursor, col_idx) = setup_align_cursor(db, table_name, config.use_long_cigar)?;
-            let worker_reflist = ReferenceList::make_database(db, reflist_opts, 0)
-                .context("failed to create per-worker ReferenceList")?;
-            Ok((cursor, col_idx, worker_reflist))
-        })
-        .collect::<Result<Vec<_>>>()?;
+
+    // Create bounded resource pool with pool_size sets.
+    let (resource_pool_tx, resource_pool_rx) = bounded::<ResourceSet>(pool_size);
+    for _ in 0..pool_size {
+        let (cursor, col_idx) = setup_align_cursor(db, table_name, config.use_long_cigar)?;
+        let reflist = ReferenceList::make_database(db, reflist_opts, 0)
+            .context("failed to create per-pool ReferenceList")?;
+        resource_pool_tx
+            .send(ResourceSet { cursor, col_idx, reflist })
+            .expect("resource pool channel should not be full during init");
+    }
 
     let (work_tx, work_rx) = bounded::<WorkItem>(effective_threads * 2);
     let (result_tx, result_rx) = bounded::<ResultChunk>(effective_threads * 2);
     // Buffer pool: collector returns emptied Vec<u8>s for workers to reuse,
     // capping total 8MB allocations to ~2× the number of workers.
-    let (pool_tx, pool_rx) = bounded::<Vec<u8>>(effective_threads * 2);
+    let (buf_pool_tx, buf_pool_rx) = bounded::<Vec<u8>>(effective_threads * 2);
 
     std::thread::scope(|s| -> Result<()> {
-        // Spawn worker threads — each owns its own cursor and ReferenceList.
+        // Spawn worker threads — they share the bounded resource pool.
         let mut worker_handles = Vec::with_capacity(effective_threads);
-        for (cursor, col_idx, worker_reflist) in worker_resources {
-            let channels = WorkerChannels {
+        for _ in 0..effective_threads {
+            let channels = PoolWorkerChannels {
                 work_rx: work_rx.clone(),
                 result_tx: result_tx.clone(),
-                pool_rx: pool_rx.clone(),
+                buf_pool_rx: buf_pool_rx.clone(),
+                resource_pool_rx: resource_pool_rx.clone(),
+                resource_pool_tx: resource_pool_tx.clone(),
             };
             worker_handles.push(s.spawn(move || -> Result<()> {
-                worker_loop(cursor, col_idx, worker_reflist, channels, config, id_src)
+                pool_worker_loop(channels, config, id_src, progress)
             }));
         }
         // Drop our copies so only workers hold channel ends.
         drop(work_rx);
         drop(result_tx);
-        drop(pool_rx);
+        drop(buf_pool_rx);
+        drop(resource_pool_rx);
+        drop(resource_pool_tx);
 
         // Sender thread — feeds work items to workers.
+        let work_items_owned: Vec<WorkItem> = work_items.to_vec();
         s.spawn(move || {
-            for item in work_items {
+            for item in work_items_owned {
                 if work_tx.send(item).is_err() {
                     break; // Workers died — stop sending.
                 }
@@ -423,7 +471,7 @@ fn process_table_parallel(
         });
 
         // Collector — runs on the main thread, writes chunks in reference order.
-        collect_ordered_chunks(&result_rx, &pool_tx, writer)?;
+        collect_ordered_chunks(&result_rx, &buf_pool_tx, writer)?;
 
         // Workers have finished (result channel closed). Check for errors.
         for handle in worker_handles {
@@ -508,114 +556,169 @@ fn collect_ordered_chunks(
     Ok(())
 }
 
-/// Channels used by a worker thread.
-struct WorkerChannels {
+/// Channels used by a pool-based worker thread.
+struct PoolWorkerChannels {
     work_rx: Receiver<WorkItem>,
     result_tx: Sender<ResultChunk>,
-    pool_rx: Receiver<Vec<u8>>,
+    buf_pool_rx: Receiver<Vec<u8>>,
+    resource_pool_rx: Receiver<ResourceSet>,
+    resource_pool_tx: Sender<ResourceSet>,
 }
 
-/// Worker loop: process references from the work channel, send chunked results back.
-fn worker_loop(
-    cursor: VCursor,
-    col_idx: AlignColumnIndices,
-    reflist: ReferenceList,
-    channels: WorkerChannels,
+/// Mutable per-worker state reused across references.
+struct WorkerState {
+    record_buf: Vec<u8>,
+    mate_cache: MateCache,
+    cols: AlignedColumns,
+    align_mgr: AlignMgr,
+}
+
+/// Worker loop: check out VDB resources from the pool per-reference, process,
+/// then return them. This bounds total VDB memory to pool_size × per-set cost.
+fn pool_worker_loop(
+    channels: PoolWorkerChannels,
     config: &AlignConfig<'_>,
     id_src: AlignIdSrc,
+    progress: &ProgressLogger,
+) -> Result<()> {
+    let mut state = WorkerState {
+        record_buf: Vec::with_capacity(1024),
+        mate_cache: MateCache::new(),
+        cols: AlignedColumns::new(),
+        align_mgr: AlignMgr::make_read().context("worker: failed to create AlignMgr")?,
+    };
+
+    // Take a buffer from the pool or allocate a new one.
+    let take_buf = || -> Vec<u8> {
+        channels.buf_pool_rx.try_recv().unwrap_or_else(|_| Vec::with_capacity(CHUNK_SIZE))
+    };
+
+    while let Ok(item) = channels.work_rx.recv() {
+        // Check out a VDB resource set (blocks if none available).
+        let resources = channels
+            .resource_pool_rx
+            .recv()
+            .map_err(|_| anyhow::anyhow!("resource pool closed unexpectedly"))?;
+
+        // Process this reference with the checked-out resources.
+        let result = process_one_reference(
+            &resources,
+            &item,
+            id_src,
+            config,
+            &mut state,
+            &take_buf,
+            &channels.result_tx,
+            progress,
+        );
+
+        // Return resources to pool BEFORE propagating errors.
+        channels
+            .resource_pool_tx
+            .send(resources)
+            .map_err(|_| anyhow::anyhow!("resource pool return channel closed"))?;
+
+        progress.reference_done();
+        result?;
+    }
+
+    Ok(())
+}
+
+/// Process a single reference using borrowed VDB resources.
+///
+/// All VDB borrows (EmitContext, PlacementSetIterator, PlacementIterator,
+/// ReferenceObj) are scoped to this function call and dropped on return,
+/// allowing the ResourceSet to be returned to the pool.
+#[allow(clippy::too_many_arguments)]
+fn process_one_reference(
+    resources: &ResourceSet,
+    item: &WorkItem,
+    id_src: AlignIdSrc,
+    config: &AlignConfig<'_>,
+    state: &mut WorkerState,
+    take_buf: &dyn Fn() -> Vec<u8>,
+    result_tx: &Sender<ResultChunk>,
+    progress: &ProgressLogger,
 ) -> Result<()> {
     let ctx = EmitContext {
-        cursor: &cursor,
-        col_idx: &col_idx,
+        cursor: &resources.cursor,
+        col_idx: &resources.col_idx,
         use_seqid: config.use_seqid,
         opts: config.opts,
     };
     let min_mapq = config.min_mapq_i32();
-    let mut record_buf = Vec::with_capacity(1024);
-    let mut mate_cache = MateCache::new();
-    let mut cols = AlignedColumns::new();
-    let align_mgr = AlignMgr::make_read().context("worker: failed to create AlignMgr")?;
 
-    // Take a buffer from the pool or allocate a new one.
-    let take_buf = || -> Vec<u8> {
-        channels.pool_rx.try_recv().unwrap_or_else(|_| Vec::with_capacity(CHUNK_SIZE))
+    let ref_obj = resources.reflist.get(item.ref_idx).context("worker: failed to get reference")?;
+
+    let pi = match PlacementIterator::make(
+        &ref_obj,
+        0,
+        item.ref_len,
+        min_mapq,
+        &resources.cursor,
+        id_src,
+    ) {
+        Ok(pi) => pi,
+        Err(e) if e.is_done() => {
+            // No alignments on this reference — send empty final chunk.
+            result_tx
+                .send(ResultChunk {
+                    order_idx: item.order_idx,
+                    chunk_seq: 0,
+                    data: Vec::new(),
+                    is_last: true,
+                })
+                .map_err(|_| anyhow::anyhow!("result channel closed"))?;
+            return Ok(());
+        }
+        Err(e) => {
+            return Err(e).context("worker: failed to create PlacementIterator");
+        }
     };
 
-    while let Ok(item) = channels.work_rx.recv() {
-        let mut psi = align_mgr
-            .make_placement_set_iterator()
-            .context("worker: failed to create PlacementSetIterator")?;
+    let mut psi = state
+        .align_mgr
+        .make_placement_set_iterator()
+        .context("worker: failed to create PlacementSetIterator")?;
+    match psi.add_placement_iterator(pi) {
+        Ok(_) => {}
+        Err(e) => {
+            return Err(e).context("worker: failed to add PlacementIterator");
+        }
+    }
 
-        // Get the ReferenceObj from this worker's private ReferenceList.
-        let ref_obj = reflist.get(item.ref_idx).context("worker: failed to get reference")?;
-
-        // Create a PlacementIterator for this single reference.
-        let pi = match PlacementIterator::make(&ref_obj, 0, item.ref_len, min_mapq, &cursor, id_src)
-        {
-            Ok(pi) => pi,
-            Err(e) if e.is_done() => {
-                // No alignments on this reference — send empty final chunk.
-                channels
-                    .result_tx
+    // Process records, sending chunks when the buffer exceeds CHUNK_SIZE.
+    let mut output_buf = take_buf();
+    let mut chunk_seq = 0usize;
+    emit_placement_records(
+        &mut psi,
+        &ctx,
+        &mut state.record_buf,
+        &mut state.mate_cache,
+        &mut state.cols,
+        |rec| {
+            progress.record(1);
+            output_buf.extend_from_slice(rec);
+            if output_buf.len() >= CHUNK_SIZE {
+                result_tx
                     .send(ResultChunk {
                         order_idx: item.order_idx,
-                        chunk_seq: 0,
-                        data: Vec::new(),
-                        is_last: true,
+                        chunk_seq,
+                        data: std::mem::replace(&mut output_buf, take_buf()),
+                        is_last: false,
                     })
                     .map_err(|_| anyhow::anyhow!("result channel closed"))?;
-                continue;
+                chunk_seq += 1;
             }
-            Err(e) => {
-                return Err(e).context("worker: failed to create PlacementIterator");
-            }
-        };
+            Ok(())
+        },
+    )?;
 
-        match psi.add_placement_iterator(pi) {
-            Ok(_) => {}
-            Err(e) => {
-                return Err(e).context("worker: failed to add PlacementIterator");
-            }
-        }
-
-        // Process records, sending chunks when the buffer exceeds CHUNK_SIZE.
-        let mut output_buf = take_buf();
-        let mut chunk_seq = 0usize;
-        emit_placement_records(
-            &mut psi,
-            &ctx,
-            &mut record_buf,
-            &mut mate_cache,
-            &mut cols,
-            |rec| {
-                output_buf.extend_from_slice(rec);
-                if output_buf.len() >= CHUNK_SIZE {
-                    channels
-                        .result_tx
-                        .send(ResultChunk {
-                            order_idx: item.order_idx,
-                            chunk_seq,
-                            data: std::mem::replace(&mut output_buf, take_buf()),
-                            is_last: false,
-                        })
-                        .map_err(|_| anyhow::anyhow!("result channel closed"))?;
-                    chunk_seq += 1;
-                }
-                Ok(())
-            },
-        )?;
-
-        // Send final chunk for this reference (may be empty).
-        channels
-            .result_tx
-            .send(ResultChunk {
-                order_idx: item.order_idx,
-                chunk_seq,
-                data: output_buf,
-                is_last: true,
-            })
-            .map_err(|_| anyhow::anyhow!("result channel closed"))?;
-    }
+    // Send final chunk for this reference (may be empty).
+    result_tx
+        .send(ResultChunk { order_idx: item.order_idx, chunk_seq, data: output_buf, is_last: true })
+        .map_err(|_| anyhow::anyhow!("result channel closed"))?;
 
     Ok(())
 }
@@ -625,6 +728,52 @@ mod tests {
     use crossbeam_channel::bounded;
 
     use super::*;
+    use crate::record::FormatOptions;
+
+    /// Build an `AlignConfig` with the given thread count for testing.
+    fn test_config(num_threads: usize) -> AlignConfig<'static> {
+        static OPTS: FormatOptions<'static> = FormatOptions {
+            prefix: None,
+            spot_group_in_name: false,
+            xi_tag: false,
+            reverse_unaligned: false,
+        };
+        AlignConfig {
+            use_seqid: false,
+            use_long_cigar: false,
+            primary_only: true,
+            min_mapq: None,
+            num_threads,
+            opts: &OPTS,
+        }
+    }
+
+    #[test]
+    fn test_pool_size_clamped_by_constant() {
+        // With many threads and many work items, pool_size is MAX_OPEN_RESOURCE_SETS.
+        let config = test_config(8);
+        assert_eq!(config.pool_size(100), MAX_OPEN_RESOURCE_SETS);
+    }
+
+    #[test]
+    fn test_pool_size_clamped_by_threads() {
+        // With 1 thread, pool_size is 1 even though MAX_OPEN_RESOURCE_SETS is 2.
+        let config = test_config(1);
+        assert_eq!(config.pool_size(100), 1);
+    }
+
+    #[test]
+    fn test_pool_size_clamped_by_work_items() {
+        // With 1 work item, pool_size is 1 regardless of threads.
+        let config = test_config(8);
+        assert_eq!(config.pool_size(1), 1);
+    }
+
+    #[test]
+    fn test_pool_size_minimum_one() {
+        let config = test_config(0);
+        assert_eq!(config.pool_size(5), 1);
+    }
 
     /// Helper: send chunks into a channel and collect the output via `collect_ordered_chunks`.
     fn run_collector(chunks: Vec<ResultChunk>) -> Vec<u8> {

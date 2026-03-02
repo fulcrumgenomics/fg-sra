@@ -7,6 +7,7 @@ mod header;
 mod matecache;
 mod md_tag;
 mod output;
+mod progress;
 mod quality;
 mod record;
 mod unaligned;
