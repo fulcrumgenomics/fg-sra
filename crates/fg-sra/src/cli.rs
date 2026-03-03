@@ -128,6 +128,11 @@ pub struct ToSam {
     /// Number of worker threads (default: available cores).
     #[arg(short = 't', long = "threads")]
     pub threads: Option<usize>,
+
+    /// Explicit VDB cursor pool size (number of cursors).
+    /// Default: one cursor per thread.
+    #[arg(long = "pool-size")]
+    pub pool_size: Option<usize>,
 }
 
 /// Output format for converted records.
@@ -249,6 +254,7 @@ impl ToSam {
             num_threads: self.threads.unwrap_or_else(|| {
                 std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1)
             }),
+            pool_size_override: self.pool_size,
             opts: &opts,
             regions: &self.aligned_region,
         };
@@ -406,6 +412,15 @@ mod tests {
         assert!(cmd.spot_group);
         assert!(cmd.omit_quality);
         assert_eq!(cmd.threads, Some(4));
+    }
+
+    #[test]
+    fn test_pool_size_flag() {
+        let cmd = parse(&["--pool-size", "4", "SRR123456"]);
+        assert_eq!(cmd.pool_size, Some(4));
+
+        let cmd = parse(&["SRR123456"]);
+        assert_eq!(cmd.pool_size, None);
     }
 
     #[test]

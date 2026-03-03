@@ -34,6 +34,8 @@ pub struct AlignConfig<'a> {
     pub primary_only: bool,
     pub min_mapq: Option<u32>,
     pub num_threads: usize,
+    /// Explicit cursor pool size override, or `None` for the default heuristic.
+    pub pool_size_override: Option<usize>,
     pub opts: &'a FormatOptions<'a>,
     /// Genomic regions to restrict output to. Empty means all references.
     pub regions: &'a [String],
@@ -54,9 +56,14 @@ impl AlignConfig<'_> {
         self.min_mapq.map(|m| m as i32).unwrap_or(0)
     }
 
-    /// Compute the resource pool size: `min(num_threads, num_work_items)`, clamped to at least 1.
+    /// Compute the resource pool size (number of VDB cursors).
+    ///
+    /// When `--pool-size` is set, uses the explicit override.  Otherwise
+    /// defaults to one cursor per thread (1:1).  The result is clamped to
+    /// `[1, num_work_items]`.
     fn pool_size(&self, num_work_items: usize) -> usize {
-        self.num_threads.min(num_work_items).max(1)
+        let n = self.pool_size_override.unwrap_or(self.num_threads);
+        n.min(num_work_items).max(1)
     }
 }
 
@@ -839,6 +846,7 @@ mod tests {
             primary_only: true,
             min_mapq: None,
             num_threads,
+            pool_size_override: None,
             opts: &OPTS,
             regions: &[],
         }
@@ -851,29 +859,52 @@ mod tests {
 
     #[test]
     fn test_pool_size_equals_threads() {
-        // With many work items, pool_size equals num_threads.
+        // Default: 1:1 cursors to threads.
+        let config = test_config(1);
+        assert_eq!(config.pool_size(100), 1);
+
+        let config = test_config(4);
+        assert_eq!(config.pool_size(100), 4);
+
         let config = test_config(8);
         assert_eq!(config.pool_size(100), 8);
     }
 
     #[test]
-    fn test_pool_size_clamped_by_threads() {
-        // With 1 thread, pool_size is 1 regardless of work items.
-        let config = test_config(1);
-        assert_eq!(config.pool_size(100), 1);
-    }
-
-    #[test]
     fn test_pool_size_clamped_by_work_items() {
-        // With 1 work item, pool_size is 1 regardless of threads.
+        // 8 threads but only 3 work items → 3.
         let config = test_config(8);
-        assert_eq!(config.pool_size(1), 1);
+        assert_eq!(config.pool_size(3), 3);
     }
 
     #[test]
     fn test_pool_size_minimum_one() {
         let config = test_config(0);
         assert_eq!(config.pool_size(5), 1);
+    }
+
+    #[test]
+    fn test_pool_size_override_used() {
+        // Explicit override of 6 with 100 work items → 6.
+        let mut config = test_config(16);
+        config.pool_size_override = Some(6);
+        assert_eq!(config.pool_size(100), 6);
+    }
+
+    #[test]
+    fn test_pool_size_override_clamped_by_work_items() {
+        // Override of 10 but only 3 work items → 3.
+        let mut config = test_config(16);
+        config.pool_size_override = Some(10);
+        assert_eq!(config.pool_size(3), 3);
+    }
+
+    #[test]
+    fn test_pool_size_override_zero_clamped_to_one() {
+        // Override of 0 → clamped to 1.
+        let mut config = test_config(8);
+        config.pool_size_override = Some(0);
+        assert_eq!(config.pool_size(100), 1);
     }
 
     /// Helper: send chunks into a channel and collect the output via `collect_ordered_chunks`.
