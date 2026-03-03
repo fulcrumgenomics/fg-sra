@@ -23,11 +23,17 @@ Key features:
 - **Multi-threaded** reference processing with ordered output
 - **SAM and BAM** output (BAM via multi-threaded BGZF compression)
 - **gzip/bzip2** compression for SAM output
+- **FASTA/FASTQ** output modes
 - **Region filtering** by genomic coordinates
-- **RNA splice detection** with XS tag generation
-- **MD tag computation**
 - **Quality quantization**
 - **Mate cache** for proper SAM flag and mate-pair information
+
+The following `sam-dump` options are accepted but **not yet supported**:
+- `--hide-identical` — output `=` for bases matching reference
+- `--with-md-flag` — compute and output the MD tag
+- `--rna-splicing` / `--rna-splice-level` / `--rna-splice-log` — RNA splice detection
+
+These require reference sequence access via VDB FFI that has not yet been implemented.
 
 ## Installation
 

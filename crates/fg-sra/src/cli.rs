@@ -104,10 +104,6 @@ pub struct ToSam {
     #[arg(short = 'c', long = "cigar-long")]
     pub cigar_long: bool,
 
-    /// Output `=` for bases matching reference.
-    #[arg(long = "hide-identical")]
-    pub hide_identical: bool,
-
     /// Append .SPOT_GROUP to QNAME.
     #[arg(short = 'g', long = "spot-group")]
     pub spot_group: bool,
@@ -120,10 +116,6 @@ pub struct ToSam {
     #[arg(long = "reverse")]
     pub reverse: bool,
 
-    /// Compute and output MD tag.
-    #[arg(long = "with-md-flag")]
-    pub with_md_flag: bool,
-
     /// Quality score quantization (e.g. "1:10,10:20,20:30,30:40").
     #[arg(short = 'Q', long = "qual-quant")]
     pub qual_quant: Option<String>,
@@ -131,18 +123,6 @@ pub struct ToSam {
     /// Output alignment ID in XI:i tag.
     #[arg(long = "XI")]
     pub xi_tag: bool,
-
-    /// Detect RNA splicing (replace D with N in CIGAR, add XS:A tag).
-    #[arg(long = "rna-splicing")]
-    pub rna_splicing: bool,
-
-    /// Mismatch tolerance for splice site detection (0, 1, or 2).
-    #[arg(long = "rna-splice-level", default_value = "0")]
-    pub rna_splice_level: u8,
-
-    /// Log splice events to file.
-    #[arg(long = "rna-splice-log")]
-    pub rna_splice_log: Option<PathBuf>,
 
     // ── Performance options ───────────────────────────────────────────
     /// Number of worker threads (default: available cores).
@@ -360,16 +340,8 @@ mod tests {
 
     #[test]
     fn test_cigar_and_formatting() {
-        let cmd = parse(&[
-            "--cigar-long",
-            "--hide-identical",
-            "--spot-group",
-            "--prefix",
-            "PRE",
-            "SRR123456",
-        ]);
+        let cmd = parse(&["--cigar-long", "--spot-group", "--prefix", "PRE", "SRR123456"]);
         assert!(cmd.cigar_long);
-        assert!(cmd.hide_identical);
         assert!(cmd.spot_group);
         assert_eq!(cmd.prefix.as_deref(), Some("PRE"));
     }
@@ -399,21 +371,6 @@ mod tests {
     fn test_min_mapq() {
         let cmd = parse(&["--min-mapq", "30", "SRR123456"]);
         assert_eq!(cmd.min_mapq, Some(30));
-    }
-
-    #[test]
-    fn test_rna_splicing() {
-        let cmd = parse(&[
-            "--rna-splicing",
-            "--rna-splice-level",
-            "2",
-            "--rna-splice-log",
-            "/tmp/splice.log",
-            "SRR123456",
-        ]);
-        assert!(cmd.rna_splicing);
-        assert_eq!(cmd.rna_splice_level, 2);
-        assert_eq!(cmd.rna_splice_log.as_deref(), Some(std::path::Path::new("/tmp/splice.log")));
     }
 
     #[test]
@@ -461,11 +418,5 @@ mod tests {
     fn test_missing_accession_fails() {
         let result = Cli::try_parse_from(["fg-sra", "tosam"]);
         assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_default_rna_splice_level() {
-        let cmd = parse(&["SRR123456"]);
-        assert_eq!(cmd.rna_splice_level, 0);
     }
 }
