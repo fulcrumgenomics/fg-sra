@@ -200,7 +200,13 @@ impl ToSam {
 
         // Header.
         if !self.no_header {
-            let header = generate_header(&db, self.header, self.seqid, &self.header_comment)?;
+            let header = generate_header(
+                &db,
+                self.header,
+                self.seqid,
+                &self.header_comment,
+                self.header_file.as_deref(),
+            )?;
             writer.write_header(&header)?;
         }
 

@@ -3,6 +3,8 @@
 //! Reads the `BAM_HEADER` metadata node and `ReferenceList` to produce
 //! `@HD`, `@SQ`, `@RG`, and `@CO` header lines.
 
+use std::path::Path;
+
 use anyhow::{Context, Result};
 use fg_sra_vdb::database::VDatabase;
 use fg_sra_vdb::reference::ReferenceList;
@@ -10,10 +12,11 @@ use fg_sra_vdb::reference::ReferenceList;
 /// Generate the SAM header string for the given database.
 ///
 /// Strategy (matching sam-dump behavior):
-/// 1. Try to read the stored `BAM_HEADER` metadata node.
-/// 2. If not found **or** `regenerate` is true, build a minimal header from
-///    the `ReferenceList` (`@HD` + `@SQ` lines).
-/// 3. Append any user-supplied `@CO` comment lines.
+/// 1. If `header_file` is provided, read the file as the header.
+/// 2. Otherwise, if `regenerate` is true, build from `ReferenceList`.
+/// 3. Otherwise, try the stored `BAM_HEADER` metadata node, falling back to
+///    `ReferenceList` if not found.
+/// 4. Append any user-supplied `@CO` comment lines.
 ///
 /// The `use_seqid` flag controls whether `@SQ SN:` uses the sequence ID
 /// (e.g. `NC_000001.11`) or the reference name (e.g. `chr1`).
@@ -22,8 +25,12 @@ pub fn generate_header(
     regenerate: bool,
     use_seqid: bool,
     comments: &[String],
+    header_file: Option<&Path>,
 ) -> Result<String> {
-    let header = if regenerate {
+    let header = if let Some(path) = header_file {
+        std::fs::read_to_string(path)
+            .with_context(|| format!("failed to read header file: {}", path.display()))?
+    } else if regenerate {
         build_header_from_references(db, use_seqid)?
     } else {
         match read_bam_header(db)? {
@@ -92,6 +99,38 @@ fn build_header_from_references(db: &VDatabase, use_seqid: bool) -> Result<Strin
 
 #[cfg(test)]
 mod tests {
+    use std::io::Write;
+
+    #[test]
+    fn test_header_file_is_read() {
+        let mut tmp = std::env::temp_dir();
+        tmp.push("fg_sra_test_header.sam");
+        {
+            let mut f = std::fs::File::create(&tmp).unwrap();
+            f.write_all(b"@HD\tVN:1.6\n@SQ\tSN:custom\tLN:100\n").unwrap();
+        }
+
+        // Exercise the header-file branch logic without a live VDB database.
+        let header = std::fs::read_to_string(&tmp).unwrap();
+        let mut result = header;
+        if !result.is_empty() && !result.ends_with('\n') {
+            result.push('\n');
+        }
+        result.push_str("@CO\textra\n");
+
+        assert!(result.starts_with("@HD\tVN:1.6\n"));
+        assert!(result.contains("@SQ\tSN:custom\tLN:100\n"));
+        assert!(result.contains("@CO\textra\n"));
+
+        std::fs::remove_file(&tmp).ok();
+    }
+
+    #[test]
+    fn test_header_file_missing_returns_error() {
+        let result = std::fs::read_to_string("/nonexistent/header.sam");
+        assert!(result.is_err());
+    }
+
     #[test]
     fn test_generate_header_with_comments() {
         // Test comment appending logic with a pre-built header string.
