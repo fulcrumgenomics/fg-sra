@@ -215,6 +215,7 @@ impl ToSam {
             spot_group_in_name: self.spot_group,
             xi_tag: self.xi_tag,
             reverse_unaligned: self.reverse,
+            omit_quality: self.omit_quality,
         };
 
         let align_config = AlignConfig {

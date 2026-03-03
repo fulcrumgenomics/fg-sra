@@ -780,6 +780,7 @@ mod tests {
             spot_group_in_name: false,
             xi_tag: false,
             reverse_unaligned: false,
+            omit_quality: false,
         };
         AlignConfig {
             use_seqid: false,

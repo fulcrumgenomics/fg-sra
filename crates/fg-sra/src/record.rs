@@ -150,6 +150,8 @@ pub struct FormatOptions<'a> {
     pub xi_tag: bool,
     /// Reverse unaligned reads according to read type.
     pub reverse_unaligned: bool,
+    /// Replace quality values with `*`.
+    pub omit_quality: bool,
 }
 
 /// Format a SAM line for an aligned record.
@@ -238,7 +240,7 @@ pub fn format_aligned_record(
 
     // QUAL
     buf.push(b'\t');
-    if cols.quality.is_empty() {
+    if opts.omit_quality || cols.quality.is_empty() {
         buf.push(b'*');
     } else {
         buf.extend_from_slice(cols.quality.as_bytes());
@@ -328,7 +330,7 @@ pub fn format_unaligned_record(
 
     // QUAL (raw phred → phred+33)
     buf.push(b'\t');
-    if cols.quality.is_empty() {
+    if opts.omit_quality || cols.quality.is_empty() {
         buf.push(b'*');
     } else if opts.reverse_unaligned && (cols.read_type & READ_TYPE_REVERSE) != 0 {
         // Reverse the quality scores.
@@ -447,6 +449,7 @@ mod tests {
             spot_group_in_name: false,
             xi_tag: false,
             reverse_unaligned: false,
+            omit_quality: false,
         }
     }
 
@@ -495,12 +498,8 @@ mod tests {
     #[test]
     fn test_aligned_record_with_prefix_and_spot_group() {
         let cols = default_aligned_cols();
-        let opts = FormatOptions {
-            prefix: Some("PRE"),
-            spot_group_in_name: true,
-            xi_tag: false,
-            reverse_unaligned: false,
-        };
+        let opts =
+            FormatOptions { prefix: Some("PRE"), spot_group_in_name: true, ..default_opts() };
         let mut buf = Vec::new();
 
         format_aligned_record(&mut buf, &cols, "chr1", 100, 60, 42, None, &opts);
@@ -726,5 +725,40 @@ mod tests {
         let fields: Vec<&str> = line.trim_end().split('\t').collect();
         assert_eq!(fields[6], "*"); // RNEXT
         assert_eq!(fields[7], "0"); // PNEXT
+    }
+
+    #[test]
+    fn test_aligned_omit_quality() {
+        let cols = default_aligned_cols();
+        let opts = FormatOptions { omit_quality: true, ..default_opts() };
+        let mut buf = Vec::new();
+
+        format_aligned_record(&mut buf, &cols, "chr1", 100, 60, 42, None, &opts);
+
+        let line = String::from_utf8(buf).unwrap();
+        let fields: Vec<&str> = line.trim_end().split('\t').collect();
+        assert_eq!(fields[10], "*"); // QUAL omitted
+    }
+
+    #[test]
+    fn test_unaligned_omit_quality() {
+        let cols = UnalignedColumns {
+            name: "spot1",
+            read: "ACGT",
+            quality: &[30, 30, 30, 30],
+            spot_group: "",
+            read_type: READ_TYPE_BIOLOGICAL,
+            read_filter: READ_FILTER_PASS,
+            num_bio_reads: 1,
+            bio_read_index: 0,
+        };
+        let opts = FormatOptions { omit_quality: true, ..default_opts() };
+        let mut buf = Vec::new();
+
+        format_unaligned_record(&mut buf, &cols, &opts);
+
+        let line = String::from_utf8(buf).unwrap();
+        let fields: Vec<&str> = line.trim_end().split('\t').collect();
+        assert_eq!(fields[10], "*"); // QUAL omitted
     }
 }
