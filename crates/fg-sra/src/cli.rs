@@ -193,19 +193,9 @@ impl ToSam {
             .open_db_read(accession)
             .with_context(|| format!("failed to open database: {accession}"))?;
 
-        let compression = if self.gzip {
-            crate::output::CompressionMode::Gzip
-        } else if self.bzip2 {
-            crate::output::CompressionMode::Bzip2
-        } else {
-            crate::output::CompressionMode::None
-        };
-        let mut writer = match &self.output_file {
-            Some(path) => OutputWriter::from_path_with_compression(path, compression)?,
-            None => OutputWriter::stdout_with_compression(compression),
-        };
-
-        let output_mode = if self.fasta {
+        let output_mode = if self.output_format == OutputFormat::Bam {
+            crate::record::OutputMode::Bam
+        } else if self.fasta {
             crate::record::OutputMode::Fasta
         } else if self.fastq {
             crate::record::OutputMode::Fastq
@@ -213,17 +203,50 @@ impl ToSam {
             crate::record::OutputMode::Sam
         };
 
-        // Header (suppressed for FASTA/FASTQ output).
-        if !self.no_header && output_mode == crate::record::OutputMode::Sam {
-            let header = generate_header(
+        let mut writer = if output_mode == crate::record::OutputMode::Bam {
+            match &self.output_file {
+                Some(path) => OutputWriter::bam_from_path(path)?,
+                None => OutputWriter::bam_stdout(),
+            }
+        } else {
+            let compression = if self.gzip {
+                crate::output::CompressionMode::Gzip
+            } else if self.bzip2 {
+                crate::output::CompressionMode::Bzip2
+            } else {
+                crate::output::CompressionMode::None
+            };
+            match &self.output_file {
+                Some(path) => OutputWriter::from_path_with_compression(path, compression)?,
+                None => OutputWriter::stdout_with_compression(compression),
+            }
+        };
+
+        // Generate the header for SAM and BAM modes.
+        let header_text = if !self.no_header
+            && matches!(
+                output_mode,
+                crate::record::OutputMode::Sam | crate::record::OutputMode::Bam
+            ) {
+            let h = generate_header(
                 &db,
                 self.header,
                 self.seqid,
                 &self.header_comment,
                 self.header_file.as_deref(),
             )?;
-            writer.write_header(&header)?;
-        }
+            writer.write_header(&h)?;
+            Some(h)
+        } else {
+            None
+        };
+
+        // Build ref_name → ref_id map for BAM output.
+        let ref_name_to_id = if output_mode == crate::record::OutputMode::Bam {
+            header_text.as_deref().map(crate::output::build_ref_name_to_id)
+        } else {
+            None
+        };
 
         let qual_table =
             self.qual_quant.as_deref().map(crate::quality::parse_qual_quant).transpose()?;
@@ -235,6 +258,7 @@ impl ToSam {
             omit_quality: self.omit_quality,
             qual_quant: qual_table.as_ref(),
             output_mode,
+            ref_name_to_id: ref_name_to_id.as_ref(),
         };
 
         let align_config = AlignConfig {

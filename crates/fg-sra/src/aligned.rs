@@ -369,17 +369,18 @@ fn process_alignment_table_sequential(
     let min_mapq = config.min_mapq_i32();
     let align_mgr = AlignMgr::make_read().context("failed to create AlignMgr")?;
 
-    let ctx = EmitContext {
-        cursor: &cursor,
-        col_idx: &col_idx,
-        use_seqid: config.use_seqid,
-        opts: config.opts,
-    };
     let mut record_buf = Vec::with_capacity(1024);
     let mut mate_cache = MateCache::new();
     let mut cols = AlignedColumns::new();
 
     for item in work_items {
+        let ctx = EmitContext {
+            cursor: &cursor,
+            col_idx: &col_idx,
+            use_seqid: config.use_seqid,
+            opts: config.opts,
+            ref_id: item.ref_idx as i32,
+        };
         let ref_obj = reflist.get(item.ref_idx).context("failed to get reference")?;
 
         let pi = match PlacementIterator::make(
@@ -433,6 +434,9 @@ struct EmitContext<'a> {
     col_idx: &'a AlignColumnIndices,
     use_seqid: bool,
     opts: &'a FormatOptions<'a>,
+    /// Numeric reference ID (BAM refID); the ReferenceList index of the
+    /// reference being processed. Used for BAM binary encoding.
+    ref_id: i32,
 }
 
 /// Walk a PlacementSetIterator and emit formatted SAM records via the `emit` callback.
@@ -477,6 +481,7 @@ fn emit_placement_records(
                         record_buf,
                         cols,
                         &ref_name,
+                        ctx.ref_id,
                         ref_pos,
                         mapq,
                         align_id,
@@ -776,6 +781,7 @@ fn process_one_reference(
         col_idx: &resources.col_idx,
         use_seqid: config.use_seqid,
         opts: config.opts,
+        ref_id: item.ref_idx as i32,
     };
     let min_mapq = config.min_mapq_i32();
 
@@ -870,6 +876,7 @@ mod tests {
             omit_quality: false,
             qual_quant: None,
             output_mode: crate::record::OutputMode::Sam,
+            ref_name_to_id: None,
         };
         AlignConfig {
             use_seqid: false,

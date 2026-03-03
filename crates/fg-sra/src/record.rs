@@ -3,6 +3,8 @@
 //! Builds complete SAM lines in a per-record `Vec<u8>` buffer, writing
 //! all fields in a single pass rather than multiple formatted-print calls.
 
+use std::collections::HashMap;
+
 use crate::matecache::MateInfo;
 use crate::quality::QuantTable;
 
@@ -145,6 +147,7 @@ mod sam_flags {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum OutputMode {
     Sam,
+    Bam,
     Fasta,
     Fastq,
 }
@@ -163,16 +166,19 @@ pub struct FormatOptions<'a> {
     pub omit_quality: bool,
     /// Quality score quantization table.
     pub qual_quant: Option<&'a QuantTable>,
-    /// Output mode (SAM, FASTA, or FASTQ).
+    /// Output mode (SAM, BAM, FASTA, or FASTQ).
     pub output_mode: OutputMode,
+    /// Reference name → BAM reference ID map. Required for BAM output.
+    pub ref_name_to_id: Option<&'a HashMap<String, i32>>,
 }
 
-/// Format a record for an aligned read, dispatching to SAM, FASTA, or FASTQ.
+/// Format a record for an aligned read, dispatching by output mode.
 #[allow(clippy::too_many_arguments)]
 pub fn format_aligned_record(
     buf: &mut Vec<u8>,
     cols: &AlignedColumns,
     ref_name: &str,
+    ref_id: i32,
     ref_pos: i32,
     mapq: i32,
     align_id: i64,
@@ -182,6 +188,9 @@ pub fn format_aligned_record(
     match opts.output_mode {
         OutputMode::Sam => {
             format_aligned_record_sam(buf, cols, ref_name, ref_pos, mapq, align_id, mate_info, opts)
+        }
+        OutputMode::Bam => {
+            format_aligned_record_bam(buf, cols, ref_id, ref_pos, mapq, align_id, mate_info, opts)
         }
         OutputMode::Fasta => {
             buf.clear();
@@ -340,7 +349,7 @@ fn format_aligned_record_sam(
     buf.push(b'\n');
 }
 
-/// Format a record for an unaligned read, dispatching to SAM, FASTA, or FASTQ.
+/// Format a record for an unaligned read, dispatching by output mode.
 pub fn format_unaligned_record(
     buf: &mut Vec<u8>,
     cols: &UnalignedColumns<'_>,
@@ -348,6 +357,7 @@ pub fn format_unaligned_record(
 ) {
     match opts.output_mode {
         OutputMode::Sam => format_unaligned_record_sam(buf, cols, opts),
+        OutputMode::Bam => format_unaligned_record_bam(buf, cols, opts),
         OutputMode::Fasta => {
             buf.clear();
             buf.push(b'>');
@@ -582,6 +592,397 @@ fn write_tag_str(buf: &mut Vec<u8>, tag: &[u8; 2], val: &str) {
     buf.extend_from_slice(val.as_bytes());
 }
 
+// ── BAM binary encoding ──────────────────────────────────────────────────
+
+/// Format an aligned record as BAM binary (block_size prefix + record data).
+#[allow(clippy::too_many_arguments)]
+fn format_aligned_record_bam(
+    buf: &mut Vec<u8>,
+    cols: &AlignedColumns,
+    ref_id: i32,
+    ref_pos: i32,
+    mapq: i32,
+    align_id: i64,
+    mate_info: Option<&MateInfo>,
+    opts: &FormatOptions<'_>,
+) {
+    buf.clear();
+
+    let flags = apply_read_filter(cols.sam_flags, cols.read_filter);
+
+    // Build QNAME (null-terminated).
+    let mut qname_buf = Vec::with_capacity(64);
+    write_qname(
+        &mut qname_buf,
+        opts.prefix,
+        &cols.seq_name,
+        &cols.spot_group,
+        '.',
+        opts.spot_group_in_name,
+    );
+    qname_buf.push(0); // null terminator
+    let l_read_name = qname_buf.len() as u8;
+
+    // Parse CIGAR ops.
+    let cigar_ops = parse_cigar_to_bam(&cols.cigar);
+    let n_cigar_op = cigar_ops.len() as u16;
+
+    // Compute alignment end for bin calculation.
+    let align_end = ref_pos + cigar_ref_length(&cigar_ops);
+    let bin = reg2bin(ref_pos as u32, align_end as u32);
+
+    let seq = cols.read.as_bytes();
+    let l_seq = seq.len() as i32;
+
+    // Resolve mate info.
+    let (mate_ref_id, mate_pos, tlen) = if let Some(m) = mate_info {
+        // Mate is on same reference (mate cache only stores same-ref mates).
+        (ref_id, m.ref_pos, m.tlen)
+    } else if cols.mate_align_id != 0 {
+        let rnext = cols.mate_ref_name.as_str();
+        let mate_rid = if rnext.is_empty() || rnext == "*" {
+            -1
+        } else if rnext == "=" {
+            ref_id
+        } else {
+            opts.ref_name_to_id.and_then(|m| m.get(rnext).copied()).unwrap_or(-1)
+        };
+        let mpos = if mate_rid == -1 { -1 } else { cols.mate_ref_pos };
+        (mate_rid, mpos, cols.template_len)
+    } else {
+        (-1, -1, 0)
+    };
+
+    // Reserve space for block_size (4 bytes), filled in at the end.
+    let block_start = buf.len();
+    buf.extend_from_slice(&[0u8; 4]);
+
+    // Fixed-length fields (32 bytes).
+    buf.extend_from_slice(&ref_id.to_le_bytes());
+    buf.extend_from_slice(&ref_pos.to_le_bytes());
+    buf.push(l_read_name);
+    buf.push(mapq as u8);
+    buf.extend_from_slice(&bin.to_le_bytes());
+    buf.extend_from_slice(&n_cigar_op.to_le_bytes());
+    buf.extend_from_slice(&(flags as u16).to_le_bytes());
+    buf.extend_from_slice(&l_seq.to_le_bytes());
+    buf.extend_from_slice(&mate_ref_id.to_le_bytes());
+    buf.extend_from_slice(&mate_pos.to_le_bytes());
+    buf.extend_from_slice(&tlen.to_le_bytes());
+
+    // Variable-length fields.
+    buf.extend_from_slice(&qname_buf);
+
+    for &op in &cigar_ops {
+        buf.extend_from_slice(&op.to_le_bytes());
+    }
+
+    encode_sequence(buf, seq);
+    encode_quality_aligned(buf, cols.quality.as_bytes(), l_seq as usize, opts);
+
+    // Aux tags.
+    write_bam_tag_u32(buf, b"NM", cols.edit_distance);
+    if cols.alignment_count > 0 {
+        write_bam_tag_u32(buf, b"NH", cols.alignment_count as u32);
+    }
+    if !cols.spot_group.is_empty() {
+        write_bam_tag_str(buf, b"RG", &cols.spot_group);
+    }
+    if opts.xi_tag {
+        write_bam_tag_i64(buf, b"XI", align_id);
+    }
+
+    // Fill in block_size.
+    let block_size = (buf.len() - block_start - 4) as i32;
+    buf[block_start..block_start + 4].copy_from_slice(&block_size.to_le_bytes());
+}
+
+/// Format an unaligned record as BAM binary.
+fn format_unaligned_record_bam(
+    buf: &mut Vec<u8>,
+    cols: &UnalignedColumns<'_>,
+    opts: &FormatOptions<'_>,
+) {
+    buf.clear();
+
+    let mut flags: u32 = sam_flags::UNMAPPED;
+    if opts.reverse_unaligned && (cols.read_type & READ_TYPE_REVERSE) != 0 {
+        flags |= sam_flags::REVERSE;
+    }
+    flags = apply_read_filter(flags, Some(cols.read_filter));
+    if cols.num_bio_reads > 1 {
+        flags |= sam_flags::PAIRED | sam_flags::MATE_UNMAPPED;
+        if cols.bio_read_index == 0 {
+            flags |= sam_flags::FIRST_IN_PAIR;
+        }
+        if cols.bio_read_index == cols.num_bio_reads - 1 {
+            flags |= sam_flags::LAST_IN_PAIR;
+        }
+    }
+
+    // Build QNAME (null-terminated).
+    let mut qname_buf = Vec::with_capacity(64);
+    write_qname(
+        &mut qname_buf,
+        opts.prefix,
+        cols.name,
+        cols.spot_group,
+        '#',
+        opts.spot_group_in_name,
+    );
+    qname_buf.push(0);
+    let l_read_name = qname_buf.len() as u8;
+
+    let seq_bytes = cols.read.as_bytes();
+    let l_seq = seq_bytes.len() as i32;
+
+    // Reserve space for block_size.
+    let block_start = buf.len();
+    buf.extend_from_slice(&[0u8; 4]);
+
+    // Fixed-length fields.
+    buf.extend_from_slice(&(-1i32).to_le_bytes()); // refID = -1
+    buf.extend_from_slice(&(-1i32).to_le_bytes()); // pos = -1
+    buf.push(l_read_name);
+    buf.push(0u8); // mapq = 0
+    buf.extend_from_slice(&4680u16.to_le_bytes()); // bin for unmapped
+    buf.extend_from_slice(&0u16.to_le_bytes()); // n_cigar_op = 0
+    buf.extend_from_slice(&(flags as u16).to_le_bytes());
+    buf.extend_from_slice(&l_seq.to_le_bytes());
+    buf.extend_from_slice(&(-1i32).to_le_bytes()); // mate refID = -1
+    buf.extend_from_slice(&(-1i32).to_le_bytes()); // mate pos = -1
+    buf.extend_from_slice(&0i32.to_le_bytes()); // tlen = 0
+
+    // Variable-length fields.
+    buf.extend_from_slice(&qname_buf);
+
+    // Sequence (reverse complement if needed).
+    if opts.reverse_unaligned && (cols.read_type & READ_TYPE_REVERSE) != 0 {
+        let mut rc = Vec::with_capacity(seq_bytes.len());
+        for &b in seq_bytes.iter().rev() {
+            rc.push(complement(b));
+        }
+        encode_sequence(buf, &rc);
+    } else {
+        encode_sequence(buf, seq_bytes);
+    }
+
+    // Quality (raw phred → raw phred for BAM, with optional quantization/reversal).
+    encode_quality_unaligned(buf, cols.quality, l_seq as usize, cols.read_type, opts);
+
+    // Aux tags.
+    if !cols.spot_group.is_empty() {
+        write_bam_tag_str(buf, b"RG", cols.spot_group);
+    }
+
+    // Fill in block_size.
+    let block_size = (buf.len() - block_start - 4) as i32;
+    buf[block_start..block_start + 4].copy_from_slice(&block_size.to_le_bytes());
+}
+
+/// Parse a CIGAR string (e.g. "50M2I48M") into packed BAM CIGAR ops.
+///
+/// Each op is encoded as `(op_len << 4) | op_code` in a u32.
+fn parse_cigar_to_bam(cigar: &str) -> Vec<u32> {
+    let mut ops = Vec::new();
+    let mut num: u32 = 0;
+    for b in cigar.bytes() {
+        if b.is_ascii_digit() {
+            num = num * 10 + (b - b'0') as u32;
+        } else {
+            let code = match b {
+                b'M' => 0,
+                b'I' => 1,
+                b'D' => 2,
+                b'N' => 3,
+                b'S' => 4,
+                b'H' => 5,
+                b'P' => 6,
+                b'=' => 7,
+                b'X' => 8,
+                _ => continue,
+            };
+            ops.push((num << 4) | code);
+            num = 0;
+        }
+    }
+    ops
+}
+
+/// Compute the reference-consuming length from packed CIGAR ops.
+fn cigar_ref_length(ops: &[u32]) -> i32 {
+    let mut len: i32 = 0;
+    for &op in ops {
+        let code = op & 0xf;
+        let op_len = (op >> 4) as i32;
+        // Reference-consuming ops: M(0), D(2), N(3), =(7), X(8)
+        if matches!(code, 0 | 2 | 3 | 7 | 8) {
+            len += op_len;
+        }
+    }
+    len
+}
+
+/// Compute the BAM indexing bin for a region `[beg, end)`.
+///
+/// Uses the binning scheme from the SAM specification with precomputed
+/// level offsets: 0, 1, 9, 73, 585, 4681.
+fn reg2bin(beg: u32, end: u32) -> u16 {
+    let end = end.saturating_sub(1);
+    if beg >> 14 == end >> 14 {
+        return (4681 + (beg >> 14)) as u16;
+    }
+    if beg >> 17 == end >> 17 {
+        return (585 + (beg >> 17)) as u16;
+    }
+    if beg >> 20 == end >> 20 {
+        return (73 + (beg >> 20)) as u16;
+    }
+    if beg >> 23 == end >> 23 {
+        return (9 + (beg >> 23)) as u16;
+    }
+    if beg >> 26 == end >> 26 {
+        return (1 + (beg >> 26)) as u16;
+    }
+    0
+}
+
+/// Encode a DNA sequence as 4-bit packed bytes for BAM.
+fn encode_sequence(buf: &mut Vec<u8>, seq: &[u8]) {
+    let packed_len = seq.len().div_ceil(2);
+    let start = buf.len();
+    buf.resize(start + packed_len, 0);
+    for (i, &base) in seq.iter().enumerate() {
+        let code = base_to_bam(base);
+        if i % 2 == 0 {
+            buf[start + i / 2] = code << 4;
+        } else {
+            buf[start + i / 2] |= code;
+        }
+    }
+}
+
+/// Convert an ASCII base to its 4-bit BAM encoding.
+fn base_to_bam(base: u8) -> u8 {
+    match base {
+        b'=' => 0,
+        b'A' | b'a' => 1,
+        b'C' | b'c' => 2,
+        b'M' | b'm' => 3,
+        b'G' | b'g' => 4,
+        b'R' | b'r' => 5,
+        b'S' | b's' => 6,
+        b'V' | b'v' => 7,
+        b'T' | b't' => 8,
+        b'W' | b'w' => 9,
+        b'Y' | b'y' => 10,
+        b'H' | b'h' => 11,
+        b'K' | b'k' => 12,
+        b'D' | b'd' => 13,
+        b'B' | b'b' => 14,
+        _ => 15, // N
+    }
+}
+
+/// Encode quality scores for an aligned BAM record (already Phred+33 → raw Phred).
+fn encode_quality_aligned(
+    buf: &mut Vec<u8>,
+    qual_p33: &[u8],
+    l_seq: usize,
+    opts: &FormatOptions<'_>,
+) {
+    if opts.omit_quality || qual_p33.is_empty() {
+        // 0xFF means "quality not stored".
+        buf.extend(std::iter::repeat_n(0xFFu8, l_seq));
+    } else if let Some(table) = opts.qual_quant {
+        for &q in qual_p33 {
+            let phred = q.saturating_sub(33);
+            buf.push(crate::quality::quantize_phred(phred, table));
+        }
+    } else {
+        for &q in qual_p33 {
+            buf.push(q.saturating_sub(33));
+        }
+    }
+}
+
+/// Encode quality scores for an unaligned BAM record (raw Phred values).
+fn encode_quality_unaligned(
+    buf: &mut Vec<u8>,
+    quality: &[u8],
+    l_seq: usize,
+    read_type: u8,
+    opts: &FormatOptions<'_>,
+) {
+    if opts.omit_quality || quality.is_empty() {
+        buf.extend(std::iter::repeat_n(0xFFu8, l_seq));
+    } else if opts.reverse_unaligned && (read_type & READ_TYPE_REVERSE) != 0 {
+        for &q in quality.iter().rev() {
+            let phred = if let Some(table) = opts.qual_quant {
+                crate::quality::quantize_phred(q, table)
+            } else {
+                q
+            };
+            buf.push(phred);
+        }
+    } else {
+        for &q in quality {
+            let phred = if let Some(table) = opts.qual_quant {
+                crate::quality::quantize_phred(q, table)
+            } else {
+                q
+            };
+            buf.push(phred);
+        }
+    }
+}
+
+/// Write a BAM auxiliary tag with an integer value, using the smallest type.
+fn write_bam_tag_u32(buf: &mut Vec<u8>, tag: &[u8; 2], val: u32) {
+    buf.extend_from_slice(tag);
+    if val <= 0xFF {
+        buf.push(b'C');
+        buf.push(val as u8);
+    } else if val <= 0xFFFF {
+        buf.push(b'S');
+        buf.extend_from_slice(&(val as u16).to_le_bytes());
+    } else {
+        buf.push(b'I');
+        buf.extend_from_slice(&val.to_le_bytes());
+    }
+}
+
+/// Write a BAM auxiliary tag with an i64 value.
+fn write_bam_tag_i64(buf: &mut Vec<u8>, tag: &[u8; 2], val: i64) {
+    buf.extend_from_slice(tag);
+    if (0..=0xFF).contains(&val) {
+        buf.push(b'C');
+        buf.push(val as u8);
+    } else if (0..=0xFFFF).contains(&val) {
+        buf.push(b'S');
+        buf.extend_from_slice(&(val as u16).to_le_bytes());
+    } else if (0..=0xFFFF_FFFF).contains(&val) {
+        buf.push(b'I');
+        buf.extend_from_slice(&(val as u32).to_le_bytes());
+    } else if val >= i32::MIN as i64 && val <= i32::MAX as i64 {
+        buf.push(b'i');
+        buf.extend_from_slice(&(val as i32).to_le_bytes());
+    } else {
+        // BAM doesn't have a native i64 tag type; fall back to string.
+        buf.push(b'Z');
+        buf.extend_from_slice(itoa::Buffer::new().format(val).as_bytes());
+        buf.push(0);
+    }
+}
+
+/// Write a BAM auxiliary tag with a string value (null-terminated).
+fn write_bam_tag_str(buf: &mut Vec<u8>, tag: &[u8; 2], val: &str) {
+    buf.extend_from_slice(tag);
+    buf.push(b'Z');
+    buf.extend_from_slice(val.as_bytes());
+    buf.push(0);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -595,6 +996,7 @@ mod tests {
             omit_quality: false,
             qual_quant: None,
             output_mode: OutputMode::Sam,
+            ref_name_to_id: None,
         }
     }
 
@@ -622,7 +1024,7 @@ mod tests {
         let opts = default_opts();
         let mut buf = Vec::new();
 
-        format_aligned_record(&mut buf, &cols, "chr1", 100, 60, 42, None, &opts);
+        format_aligned_record(&mut buf, &cols, "chr1", 0, 100, 60, 42, None, &opts);
 
         let line = String::from_utf8(buf).unwrap();
         let fields: Vec<&str> = line.trim_end().split('\t').collect();
@@ -647,7 +1049,7 @@ mod tests {
             FormatOptions { prefix: Some("PRE"), spot_group_in_name: true, ..default_opts() };
         let mut buf = Vec::new();
 
-        format_aligned_record(&mut buf, &cols, "chr1", 100, 60, 42, None, &opts);
+        format_aligned_record(&mut buf, &cols, "chr1", 0, 100, 60, 42, None, &opts);
 
         let line = String::from_utf8(buf).unwrap();
         let fields: Vec<&str> = line.trim_end().split('\t').collect();
@@ -661,7 +1063,7 @@ mod tests {
         let mate = MateInfo { ref_pos: 200, tlen: -300 };
         let mut buf = Vec::new();
 
-        format_aligned_record(&mut buf, &cols, "chr1", 100, 60, 42, Some(&mate), &opts);
+        format_aligned_record(&mut buf, &cols, "chr1", 0, 100, 60, 42, Some(&mate), &opts);
 
         let line = String::from_utf8(buf).unwrap();
         let fields: Vec<&str> = line.trim_end().split('\t').collect();
@@ -676,7 +1078,7 @@ mod tests {
         let opts = FormatOptions { xi_tag: true, ..default_opts() };
         let mut buf = Vec::new();
 
-        format_aligned_record(&mut buf, &cols, "chr1", 100, 60, 42, None, &opts);
+        format_aligned_record(&mut buf, &cols, "chr1", 0, 100, 60, 42, None, &opts);
 
         let line = String::from_utf8(buf).unwrap();
         assert!(line.contains("NM:i:1"));
@@ -693,7 +1095,7 @@ mod tests {
         let opts = default_opts();
         let mut buf = Vec::new();
 
-        format_aligned_record(&mut buf, &cols, "chr1", 100, 60, 42, None, &opts);
+        format_aligned_record(&mut buf, &cols, "chr1", 0, 100, 60, 42, None, &opts);
 
         let line = String::from_utf8(buf).unwrap();
         let fields: Vec<&str> = line.trim_end().split('\t').collect();
@@ -864,7 +1266,7 @@ mod tests {
         let opts = default_opts();
         let mut buf = Vec::new();
 
-        format_aligned_record(&mut buf, &cols, "chr1", 100, 60, 42, None, &opts);
+        format_aligned_record(&mut buf, &cols, "chr1", 0, 100, 60, 42, None, &opts);
 
         let line = String::from_utf8(buf).unwrap();
         let fields: Vec<&str> = line.trim_end().split('\t').collect();
@@ -878,7 +1280,7 @@ mod tests {
         let opts = FormatOptions { omit_quality: true, ..default_opts() };
         let mut buf = Vec::new();
 
-        format_aligned_record(&mut buf, &cols, "chr1", 100, 60, 42, None, &opts);
+        format_aligned_record(&mut buf, &cols, "chr1", 0, 100, 60, 42, None, &opts);
 
         let line = String::from_utf8(buf).unwrap();
         let fields: Vec<&str> = line.trim_end().split('\t').collect();
@@ -916,7 +1318,7 @@ mod tests {
         let opts = FormatOptions { qual_quant: Some(&table), ..default_opts() };
         let mut buf = Vec::new();
 
-        format_aligned_record(&mut buf, &cols, "chr1", 100, 60, 42, None, &opts);
+        format_aligned_record(&mut buf, &cols, "chr1", 0, 100, 60, 42, None, &opts);
 
         let line = String::from_utf8(buf).unwrap();
         let fields: Vec<&str> = line.trim_end().split('\t').collect();
@@ -956,7 +1358,7 @@ mod tests {
         let opts = FormatOptions { output_mode: OutputMode::Fasta, ..default_opts() };
         let mut buf = Vec::new();
 
-        format_aligned_record(&mut buf, &cols, "chr1", 100, 60, 42, None, &opts);
+        format_aligned_record(&mut buf, &cols, "chr1", 0, 100, 60, 42, None, &opts);
 
         let output = String::from_utf8(buf).unwrap();
         assert_eq!(output, ">read1\nACGTACGT\n");
@@ -968,7 +1370,7 @@ mod tests {
         let opts = FormatOptions { output_mode: OutputMode::Fastq, ..default_opts() };
         let mut buf = Vec::new();
 
-        format_aligned_record(&mut buf, &cols, "chr1", 100, 60, 42, None, &opts);
+        format_aligned_record(&mut buf, &cols, "chr1", 0, 100, 60, 42, None, &opts);
 
         let output = String::from_utf8(buf).unwrap();
         assert_eq!(output, "@read1\nACGTACGT\n+\nIIIIIIII\n");
@@ -1015,6 +1417,301 @@ mod tests {
         let output = String::from_utf8(buf).unwrap();
         // Quality: 30+33 = 63 = '?'
         assert_eq!(output, "@spot1\nACGT\n+\n????\n");
+    }
+
+    // ── BAM encoding tests ────────────────────────────────────────────
+
+    #[test]
+    fn test_parse_cigar_to_bam() {
+        let ops = parse_cigar_to_bam("50M2I48M");
+        assert_eq!(ops, vec![50 << 4, (2 << 4) | 1, 48 << 4]);
+    }
+
+    #[test]
+    fn test_parse_cigar_to_bam_all_ops() {
+        let ops = parse_cigar_to_bam("1M2I3D4N5S6H7P8=9X");
+        assert_eq!(
+            ops,
+            vec![
+                1 << 4,
+                (2 << 4) | 1,
+                (3 << 4) | 2,
+                (4 << 4) | 3,
+                (5 << 4) | 4,
+                (6 << 4) | 5,
+                (7 << 4) | 6,
+                (8 << 4) | 7,
+                (9 << 4) | 8,
+            ]
+        );
+    }
+
+    #[test]
+    fn test_cigar_ref_length_simple() {
+        // 50M2I48M → ref length = 50 + 48 = 98 (I is not ref-consuming)
+        let ops = parse_cigar_to_bam("50M2I48M");
+        assert_eq!(cigar_ref_length(&ops), 98);
+    }
+
+    #[test]
+    fn test_cigar_ref_length_all_ref_consuming() {
+        // M, D, N, =, X all consume reference
+        let ops = parse_cigar_to_bam("10M5D3N2=4X");
+        assert_eq!(cigar_ref_length(&ops), 10 + 5 + 3 + 2 + 4);
+    }
+
+    #[test]
+    fn test_cigar_ref_length_non_ref_only() {
+        // I and S do not consume reference
+        let ops = parse_cigar_to_bam("5I3S");
+        assert_eq!(cigar_ref_length(&ops), 0);
+    }
+
+    #[test]
+    fn test_reg2bin_small_region() {
+        // A region at the leaf level (within a 16kb window).
+        let bin = reg2bin(0, 100);
+        assert_eq!(bin, 4681);
+    }
+
+    #[test]
+    fn test_reg2bin_wider_region() {
+        // Spans from 0 to 200_000 → exceeds a single 16kb bin.
+        let bin = reg2bin(0, 200_000);
+        // beg >> 17 = 0, end-1 >> 17 = 1 → not same, so goes to level 2
+        // beg >> 20 = 0, end-1 >> 20 = 0 → same → 73 + 0 = 73
+        assert_eq!(bin, 73);
+    }
+
+    #[test]
+    fn test_reg2bin_unmapped_convention() {
+        // Per BAM spec, unmapped reads use bin 4680.
+        // reg2bin is not typically called for unmapped reads, but we verify the
+        // constant used in format_unaligned_record_bam matches expectations.
+        // Bin 4680 is the last level-4 bin (585 + 4095 = 4680).
+        assert_eq!(4680u16, 585 + 4095);
+    }
+
+    #[test]
+    fn test_encode_sequence_even_length() {
+        let mut buf = Vec::new();
+        encode_sequence(&mut buf, b"ACGT");
+        // A=1, C=2, G=4, T=8 → (1<<4|2), (4<<4|8) = 0x12, 0x48
+        assert_eq!(buf, vec![0x12, 0x48]);
+    }
+
+    #[test]
+    fn test_encode_sequence_odd_length() {
+        let mut buf = Vec::new();
+        encode_sequence(&mut buf, b"ACG");
+        // A=1, C=2, G=4 → (1<<4|2), (4<<4|0) = 0x12, 0x40
+        assert_eq!(buf, vec![0x12, 0x40]);
+    }
+
+    #[test]
+    fn test_encode_sequence_single_base() {
+        let mut buf = Vec::new();
+        encode_sequence(&mut buf, b"N");
+        // N=15 → 15<<4|0 = 0xF0
+        assert_eq!(buf, vec![0xF0]);
+    }
+
+    #[test]
+    fn test_base_to_bam_codes() {
+        assert_eq!(base_to_bam(b'='), 0);
+        assert_eq!(base_to_bam(b'A'), 1);
+        assert_eq!(base_to_bam(b'C'), 2);
+        assert_eq!(base_to_bam(b'G'), 4);
+        assert_eq!(base_to_bam(b'T'), 8);
+        assert_eq!(base_to_bam(b'N'), 15);
+        // Lowercase should also work.
+        assert_eq!(base_to_bam(b'a'), 1);
+        assert_eq!(base_to_bam(b'c'), 2);
+        assert_eq!(base_to_bam(b'g'), 4);
+        assert_eq!(base_to_bam(b't'), 8);
+    }
+
+    #[test]
+    fn test_write_bam_tag_u32_byte() {
+        let mut buf = Vec::new();
+        write_bam_tag_u32(&mut buf, b"NM", 5);
+        assert_eq!(buf, vec![b'N', b'M', b'C', 5]);
+    }
+
+    #[test]
+    fn test_write_bam_tag_u32_short() {
+        let mut buf = Vec::new();
+        write_bam_tag_u32(&mut buf, b"NM", 300);
+        let mut expected = vec![b'N', b'M', b'S'];
+        expected.extend_from_slice(&300u16.to_le_bytes());
+        assert_eq!(buf, expected);
+    }
+
+    #[test]
+    fn test_write_bam_tag_u32_int() {
+        let mut buf = Vec::new();
+        write_bam_tag_u32(&mut buf, b"NM", 100_000);
+        let mut expected = vec![b'N', b'M', b'I'];
+        expected.extend_from_slice(&100_000u32.to_le_bytes());
+        assert_eq!(buf, expected);
+    }
+
+    #[test]
+    fn test_write_bam_tag_i64_small() {
+        let mut buf = Vec::new();
+        write_bam_tag_i64(&mut buf, b"XI", 42);
+        assert_eq!(buf, vec![b'X', b'I', b'C', 42]);
+    }
+
+    #[test]
+    fn test_write_bam_tag_i64_large() {
+        let mut buf = Vec::new();
+        let val: i64 = 5_000_000_000; // exceeds u32 max
+        write_bam_tag_i64(&mut buf, b"XI", val);
+        // Falls back to string encoding.
+        let mut expected = vec![b'X', b'I', b'Z'];
+        expected.extend_from_slice(b"5000000000");
+        expected.push(0);
+        assert_eq!(buf, expected);
+    }
+
+    #[test]
+    fn test_write_bam_tag_str() {
+        let mut buf = Vec::new();
+        write_bam_tag_str(&mut buf, b"RG", "sample1");
+        let mut expected = vec![b'R', b'G', b'Z'];
+        expected.extend_from_slice(b"sample1");
+        expected.push(0);
+        assert_eq!(buf, expected);
+    }
+
+    #[test]
+    fn test_aligned_record_bam_structure() {
+        // Test the full BAM binary structure of an aligned record.
+        let cols = AlignedColumns {
+            seq_name: "read1".to_string(),
+            sam_flags: 0,
+            cigar: "4M".to_string(),
+            mate_align_id: 0,
+            mate_ref_name: "*".to_string(),
+            mate_ref_pos: 0,
+            template_len: 0,
+            read: "ACGT".to_string(),
+            quality: "IIII".to_string(), // Phred+33: 73-33 = 40
+            edit_distance: 0,
+            spot_group: String::new(),
+            alignment_count: 1,
+            read_filter: None,
+        };
+        let opts =
+            FormatOptions { output_mode: OutputMode::Bam, ref_name_to_id: None, ..default_opts() };
+        let mut buf = Vec::new();
+        format_aligned_record_bam(
+            &mut buf, &cols, 0,    // ref_id
+            99,   // ref_pos (0-based)
+            30,   // mapq
+            1,    // align_id
+            None, // mate_info
+            &opts,
+        );
+
+        // Parse the block_size.
+        let block_size = i32::from_le_bytes(buf[0..4].try_into().unwrap());
+        assert_eq!(block_size as usize, buf.len() - 4);
+
+        // Parse fixed-length fields.
+        let ref_id = i32::from_le_bytes(buf[4..8].try_into().unwrap());
+        assert_eq!(ref_id, 0);
+
+        let pos = i32::from_le_bytes(buf[8..12].try_into().unwrap());
+        assert_eq!(pos, 99);
+
+        let l_read_name = buf[12];
+        assert_eq!(l_read_name, 6); // "read1\0"
+
+        let mapq = buf[13];
+        assert_eq!(mapq, 30);
+
+        let n_cigar_op = u16::from_le_bytes(buf[16..18].try_into().unwrap());
+        assert_eq!(n_cigar_op, 1);
+
+        let flags = u16::from_le_bytes(buf[18..20].try_into().unwrap());
+        assert_ne!(flags & (sam_flags::UNMAPPED as u16), sam_flags::UNMAPPED as u16);
+
+        let l_seq = i32::from_le_bytes(buf[20..24].try_into().unwrap());
+        assert_eq!(l_seq, 4);
+
+        // QNAME starts at offset 36.
+        let qname_end = 36 + l_read_name as usize;
+        assert_eq!(&buf[36..qname_end - 1], b"read1");
+        assert_eq!(buf[qname_end - 1], 0); // null terminator
+
+        // CIGAR: 1 op (4M) → (4 << 4) | 0 = 64
+        let cigar_start = qname_end;
+        let cigar_op = u32::from_le_bytes(buf[cigar_start..cigar_start + 4].try_into().unwrap());
+        assert_eq!(cigar_op, 4 << 4);
+
+        // Sequence: ACGT packed → 0x12, 0x48
+        let seq_start = cigar_start + 4;
+        assert_eq!(&buf[seq_start..seq_start + 2], &[0x12, 0x48]);
+
+        // Quality: Phred 40, 40, 40, 40 (raw, not +33)
+        let qual_start = seq_start + 2;
+        assert_eq!(&buf[qual_start..qual_start + 4], &[40, 40, 40, 40]);
+    }
+
+    #[test]
+    fn test_unaligned_record_bam_structure() {
+        let cols = UnalignedColumns {
+            name: "spot1",
+            read: "ACGT",
+            quality: &[30, 30, 30, 30],
+            spot_group: "",
+            read_type: READ_TYPE_BIOLOGICAL,
+            read_filter: READ_FILTER_PASS,
+            num_bio_reads: 1,
+            bio_read_index: 0,
+        };
+        let opts = FormatOptions { output_mode: OutputMode::Bam, ..default_opts() };
+        let mut buf = Vec::new();
+        format_unaligned_record_bam(&mut buf, &cols, &opts);
+
+        // Parse block_size.
+        let block_size = i32::from_le_bytes(buf[0..4].try_into().unwrap());
+        assert_eq!(block_size as usize, buf.len() - 4);
+
+        // refID = -1 (unmapped).
+        let ref_id = i32::from_le_bytes(buf[4..8].try_into().unwrap());
+        assert_eq!(ref_id, -1);
+
+        // pos = -1.
+        let pos = i32::from_le_bytes(buf[8..12].try_into().unwrap());
+        assert_eq!(pos, -1);
+
+        // mapq = 0.
+        assert_eq!(buf[13], 0);
+
+        // bin = 4680.
+        let bin = u16::from_le_bytes(buf[14..16].try_into().unwrap());
+        assert_eq!(bin, 4680);
+
+        // n_cigar_op = 0.
+        let n_cigar_op = u16::from_le_bytes(buf[16..18].try_into().unwrap());
+        assert_eq!(n_cigar_op, 0);
+
+        // flags include UNMAPPED.
+        let flags = u16::from_le_bytes(buf[18..20].try_into().unwrap());
+        assert_ne!(flags & (sam_flags::UNMAPPED as u16), 0);
+
+        // l_seq = 4.
+        let l_seq = i32::from_le_bytes(buf[20..24].try_into().unwrap());
+        assert_eq!(l_seq, 4);
+
+        // Quality: raw phred 30 for each base.
+        let qname_end = 36 + buf[12] as usize;
+        let seq_len_packed = 4_usize.div_ceil(2);
+        let qual_start = qname_end + seq_len_packed;
+        assert_eq!(&buf[qual_start..qual_start + 4], &[30, 30, 30, 30]);
     }
 
     #[test]
