@@ -8,28 +8,48 @@ use std::io::{self, BufWriter, Write};
 use std::path::Path;
 
 use anyhow::Result;
+use bzip2::write::BzEncoder;
+use flate2::write::GzEncoder;
 
 /// Default buffer size for the output writer (256 KB).
 const OUTPUT_BUF_SIZE: usize = 256 * 1024;
 
+/// Compression mode for output.
+pub enum CompressionMode {
+    None,
+    Gzip,
+    Bzip2,
+}
+
 /// Abstraction over output destinations (stdout or file, with optional compression).
-///
-/// Phase 2 supports SAM text output only. BAM and compression (gzip/bzip2)
-/// will be added in Phase 4.
 pub struct OutputWriter {
     inner: BufWriter<Box<dyn Write>>,
 }
 
 impl OutputWriter {
-    /// Create a writer to stdout.
-    pub fn stdout() -> Self {
-        Self { inner: BufWriter::with_capacity(OUTPUT_BUF_SIZE, Box::new(io::stdout().lock())) }
+    /// Create a writer to stdout with the given compression.
+    pub fn stdout_with_compression(mode: CompressionMode) -> Self {
+        let raw: Box<dyn Write> = match mode {
+            CompressionMode::None => Box::new(io::stdout().lock()),
+            CompressionMode::Gzip => {
+                Box::new(GzEncoder::new(io::stdout().lock(), flate2::Compression::default()))
+            }
+            CompressionMode::Bzip2 => {
+                Box::new(BzEncoder::new(io::stdout().lock(), bzip2::Compression::default()))
+            }
+        };
+        Self { inner: BufWriter::with_capacity(OUTPUT_BUF_SIZE, raw) }
     }
 
-    /// Create a writer to a file.
-    pub fn from_path(path: &Path) -> Result<Self> {
+    /// Create a writer to a file with the given compression.
+    pub fn from_path_with_compression(path: &Path, mode: CompressionMode) -> Result<Self> {
         let file = File::create(path)?;
-        Ok(Self { inner: BufWriter::with_capacity(OUTPUT_BUF_SIZE, Box::new(file)) })
+        let raw: Box<dyn Write> = match mode {
+            CompressionMode::None => Box::new(file),
+            CompressionMode::Gzip => Box::new(GzEncoder::new(file, flate2::Compression::default())),
+            CompressionMode::Bzip2 => Box::new(BzEncoder::new(file, bzip2::Compression::default())),
+        };
+        Ok(Self { inner: BufWriter::with_capacity(OUTPUT_BUF_SIZE, raw) })
     }
 
     /// Write a complete SAM header (already formatted with newlines).

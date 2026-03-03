@@ -193,9 +193,16 @@ impl ToSam {
             .open_db_read(accession)
             .with_context(|| format!("failed to open database: {accession}"))?;
 
+        let compression = if self.gzip {
+            crate::output::CompressionMode::Gzip
+        } else if self.bzip2 {
+            crate::output::CompressionMode::Bzip2
+        } else {
+            crate::output::CompressionMode::None
+        };
         let mut writer = match &self.output_file {
-            Some(path) => OutputWriter::from_path(path)?,
-            None => OutputWriter::stdout(),
+            Some(path) => OutputWriter::from_path_with_compression(path, compression)?,
+            None => OutputWriter::stdout_with_compression(compression),
         };
 
         // Header.
