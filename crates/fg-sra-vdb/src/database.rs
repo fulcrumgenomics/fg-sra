@@ -5,6 +5,7 @@
 use std::ptr;
 
 use crate::cursor::VCursor;
+use crate::dependencies::VdbDependencies;
 use crate::error::{VdbError, check_rc, to_cstring};
 
 /// Safe wrapper around the VDB `VDatabase` opaque type.
@@ -53,6 +54,14 @@ impl VDatabase {
         let rc = unsafe { fg_sra_vdb_sys::VDatabaseOpenMetadataRead(self.ptr, &mut meta) };
         check_rc(rc)?;
         Ok(KMetadata { ptr: meta })
+    }
+
+    /// List dependencies of this database, triggering reference cache population.
+    ///
+    /// When `missing_only` is `false`, returns all dependencies.
+    /// When `missing_only` is `true`, returns only those not yet cached locally.
+    pub fn list_dependencies(&self, missing_only: bool) -> Result<VdbDependencies, VdbError> {
+        VdbDependencies::list(self, missing_only)
     }
 
     /// Get the raw pointer (for passing to C APIs).

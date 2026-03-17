@@ -26,6 +26,7 @@ Key features:
 - **FASTA/FASTQ** output modes
 - **Region filtering** by genomic coordinates
 - **Quality quantization**
+- **Reference cache warming** via `cache-refs` to avoid resolver failures under load
 - **Mate cache** for proper SAM flag and mate-pair information
 
 The following `sam-dump` options are accepted but **not yet supported**:
@@ -86,6 +87,24 @@ For full usage, run:
 ```bash
 fg-sra tosam --help
 ```
+
+### Pre-caching References
+
+When running many `fg-sra tosam` conversions concurrently, the VDB reference
+resolver can fail under heavy load. Use `cache-refs` to serially pre-populate
+the local reference cache before launching concurrent conversions:
+
+```bash
+# Cache references for a list of accessions
+fg-sra cache-refs SRR622461 SRR765989 SRR341578
+
+# Then run conversions concurrently
+parallel fg-sra tosam {} ::: SRR622461 SRR765989 SRR341578
+```
+
+The `cache-refs` command processes accessions sequentially, resolving all
+reference sequence dependencies via VDB and caching them locally. Subsequent
+`tosam` runs will find these references in the local cache without network access.
 
 ## Performance
 

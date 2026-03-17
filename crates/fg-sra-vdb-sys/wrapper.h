@@ -17,6 +17,9 @@
 #include <vdb/cursor.h>
 #include <vdb/vdb-priv.h>
 
+/* VDB Dependencies (reference cache population) */
+#include <vdb/dependencies.h>
+
 /* KDB Metadata */
 #include <kdb/meta.h>
 #include <kdb/namelist.h>

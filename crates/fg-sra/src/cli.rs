@@ -4,6 +4,8 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
+use fg_sra_vdb::database::VDatabase;
+use fg_sra_vdb::manager::VdbManager;
 
 /// High-performance SRA toolkit.
 #[derive(Debug, Parser)]
@@ -19,6 +21,10 @@ pub enum Command {
     /// Convert SRA archives to SAM or BAM format.
     #[command(name = "tosam")]
     ToSam(ToSam),
+
+    /// Pre-populate the local VDB reference sequence cache.
+    #[command(name = "cache-refs")]
+    CacheRefs(CacheRefs),
 }
 
 /// Convert NCBI SRA archives to SAM or BAM format, replacing `sam-dump`
@@ -142,12 +148,87 @@ pub enum OutputFormat {
     Bam,
 }
 
+/// Pre-populate the local VDB reference sequence cache for one or more
+/// SRA accessions. This resolves and caches reference sequences serially,
+/// avoiding SDL resolver failures that occur under heavy concurrent load.
+#[derive(Debug, Parser)]
+pub struct CacheRefs {
+    /// SRA accession(s) or file path(s) to resolve references for.
+    #[arg(required = true)]
+    pub accessions: Vec<String>,
+}
+
 impl Cli {
     /// Dispatch to the appropriate subcommand.
     pub fn execute(&self) -> Result<()> {
         match &self.command {
             Command::ToSam(cmd) => cmd.execute(),
+            Command::CacheRefs(cmd) => cmd.execute(),
         }
+    }
+}
+
+/// Open a VDB database for reading from an accession or file path.
+///
+/// Creates a VDB manager, disables the pagemap thread (best-effort), and
+/// opens the database for reading.
+fn open_database(accession: &str) -> Result<VDatabase> {
+    let mgr = VdbManager::make_read().context("failed to create VDB manager")?;
+    mgr.disable_pagemap_thread().ok();
+    mgr.open_db_read(accession).with_context(|| format!("failed to open database: {accession}"))
+}
+
+impl CacheRefs {
+    /// Resolve and cache reference dependencies for each accession.
+    pub fn execute(&self) -> Result<()> {
+        let mut num_failed = 0usize;
+
+        for accession in &self.accessions {
+            if let Err(e) = self.process_accession(accession) {
+                eprintln!("[cache-refs] {accession}: ERROR: {e:#}");
+                num_failed += 1;
+            }
+        }
+
+        let num_ok = self.accessions.len() - num_failed;
+        eprintln!("[cache-refs] Done: {} accession(s) processed, {} failed", num_ok, num_failed);
+
+        if num_failed > 0 {
+            anyhow::bail!(
+                "{num_failed} of {} accession(s) failed to resolve",
+                self.accessions.len()
+            );
+        }
+
+        Ok(())
+    }
+
+    /// Process a single accession: open database, list dependencies, report results.
+    fn process_accession(&self, accession: &str) -> Result<()> {
+        eprintln!("[cache-refs] {accession}: resolving dependencies...");
+
+        let db = open_database(accession)?;
+
+        let deps = db
+            .list_dependencies(false)
+            .with_context(|| format!("failed to list dependencies: {accession}"))?;
+
+        let infos = deps
+            .all_info()
+            .with_context(|| format!("failed to read dependency info: {accession}"))?;
+
+        let num_local = infos.iter().filter(|d| d.local).count();
+        let num_resolved = infos.len() - num_local;
+
+        eprintln!(
+            "[cache-refs] {accession}: {} dependenc{} ({} local, {} resolved)",
+            infos.len(),
+            if infos.len() == 1 { "y" } else { "ies" },
+            num_local,
+            num_resolved,
+        );
+
+        Ok(())
     }
 }
 
@@ -162,8 +243,6 @@ impl ToSam {
 
     /// Process a single SRA accession or file path.
     fn process_accession(&self, accession: &str) -> Result<()> {
-        use fg_sra_vdb::manager::VdbManager;
-
         use crate::aligned::{AlignConfig, process_aligned_table};
         use crate::header::generate_header;
         use crate::output::OutputWriter;
@@ -171,12 +250,7 @@ impl ToSam {
         use crate::record::FormatOptions;
         use crate::unaligned::process_unaligned_reads;
 
-        let mgr = VdbManager::make_read().context("failed to create VDB manager")?;
-        mgr.disable_pagemap_thread().ok(); // Best-effort; ignore failure.
-
-        let db = mgr
-            .open_db_read(accession)
-            .with_context(|| format!("failed to open database: {accession}"))?;
+        let db = open_database(accession)?;
 
         let output_mode = if self.output_format == OutputFormat::Bam {
             crate::record::OutputMode::Bam
@@ -296,6 +370,7 @@ mod tests {
         let cli = Cli::parse_from(full);
         match cli.command {
             Command::ToSam(cmd) => cmd,
+            _ => panic!("expected ToSam command"),
         }
     }
 
@@ -421,6 +496,34 @@ mod tests {
 
         let cmd = parse(&["SRR123456"]);
         assert_eq!(cmd.pool_size, None);
+    }
+
+    fn parse_cache_refs(args: &[&str]) -> CacheRefs {
+        let mut full = vec!["fg-sra", "cache-refs"];
+        full.extend_from_slice(args);
+        let cli = Cli::parse_from(full);
+        match cli.command {
+            Command::CacheRefs(cmd) => cmd,
+            _ => panic!("expected CacheRefs command"),
+        }
+    }
+
+    #[test]
+    fn test_cache_refs_single_accession() {
+        let cmd = parse_cache_refs(&["SRR123456"]);
+        assert_eq!(cmd.accessions, vec!["SRR123456"]);
+    }
+
+    #[test]
+    fn test_cache_refs_multiple_accessions() {
+        let cmd = parse_cache_refs(&["SRR111", "SRR222", "SRR333"]);
+        assert_eq!(cmd.accessions, vec!["SRR111", "SRR222", "SRR333"]);
+    }
+
+    #[test]
+    fn test_cache_refs_missing_accession_fails() {
+        let result = Cli::try_parse_from(["fg-sra", "cache-refs"]);
+        assert!(result.is_err());
     }
 
     #[test]

@@ -127,6 +127,12 @@ fn generate_bindings(inc_dir: &Path, out_dir: &Path) {
         .allowlist_function("VDatabaseOpenTableRead")
         .allowlist_function("VDatabaseListTbl")
         .allowlist_function("VDatabaseOpenMetadataRead")
+        // VDBDependencies
+        .allowlist_function("VDatabaseListDependencies")
+        .allowlist_function("VDBDependenciesRelease")
+        .allowlist_function("VDBDependenciesCount")
+        .allowlist_function("VDBDependenciesSeqId")
+        .allowlist_function("VDBDependenciesLocal")
         // VTable
         .allowlist_function("VTableRelease")
         .allowlist_function("VTableCreateCursorRead")
@@ -180,6 +186,7 @@ fn generate_bindings(inc_dir: &Path, out_dir: &Path) {
         .allowlist_type("PlacementRecord")
         .allowlist_type("PlacementRecordExtendFuncs")
         .allowlist_type("align_id_src")
+        .allowlist_type("VDBDependencies")
         // rc.h constants for error decoding.
         .allowlist_var("rcDone")
         // Derive traits.

@@ -5,6 +5,7 @@
 
 pub mod cursor;
 pub mod database;
+pub mod dependencies;
 pub mod error;
 pub mod iterator;
 pub mod manager;
