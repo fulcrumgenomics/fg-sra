@@ -1,11 +1,11 @@
 //! Build script for fg-sra-vdb-sys.
 //!
-//! Builds ncbi-vdb from the git submodule via cmake, then generates
-//! Rust FFI bindings via bindgen.
+//! Generates Rust FFI bindings to ncbi-vdb via bindgen.
 //!
-//! Supports env var override for pre-built VDB:
-//!   VDB_INCDIR - path to ncbi-vdb interfaces/ directory
-//!   VDB_LIBDIR - path to directory containing libncbi-vdb.a
+//! Library resolution (checked in order):
+//! 1. `VDB_INCDIR` / `VDB_LIBDIR` env vars — use a pre-built ncbi-vdb
+//! 2. `vendored` cargo feature — build ncbi-vdb from the git submodule via cmake
+//! 3. Neither — fail with a helpful error message
 
 use std::env;
 use std::path::{Path, PathBuf};
@@ -13,13 +13,13 @@ use std::path::{Path, PathBuf};
 fn main() {
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
 
-    // Determine include and library paths, either from env vars or by building.
+    // Determine include and library paths.
     let (inc_dir, lib_dir) = match (env::var("VDB_INCDIR"), env::var("VDB_LIBDIR")) {
         (Ok(inc), Ok(lib)) => {
             println!("cargo:warning=Using pre-built VDB: inc={inc}, lib={lib}");
             (PathBuf::from(inc), PathBuf::from(lib))
         }
-        _ => build_ncbi_vdb(&out_dir),
+        _ => build_vendored(&out_dir),
     };
 
     // Tell cargo where to find the libraries.
@@ -51,12 +51,38 @@ fn main() {
     println!("cargo:rerun-if-env-changed=VDB_LIBDIR");
 }
 
+/// Build ncbi-vdb from the vendored submodule, or fail if vendored feature is disabled.
+fn build_vendored(_out_dir: &Path) -> (PathBuf, PathBuf) {
+    #[cfg(feature = "vendored")]
+    {
+        build_ncbi_vdb(_out_dir)
+    }
+
+    #[cfg(not(feature = "vendored"))]
+    {
+        panic!(
+            "\n\
+            ncbi-vdb not found. Either:\n\
+            \n\
+            1. Set VDB_INCDIR and VDB_LIBDIR to point at a pre-built ncbi-vdb, or\n\
+            2. Enable the `vendored` feature to build from the git submodule:\n\
+            \n\
+            cargo build --features fg-sra-vdb-sys/vendored\n\
+            "
+        );
+    }
+}
+
 /// Build ncbi-vdb from the vendored submodule using cmake.
+#[cfg(feature = "vendored")]
 fn build_ncbi_vdb(_out_dir: &Path) -> (PathBuf, PathBuf) {
     let vdb_src = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap())
         .join("../../vendor/ncbi-vdb")
         .canonicalize()
-        .expect("vendor/ncbi-vdb not found; did you initialize the git submodule?");
+        .expect(
+            "vendor/ncbi-vdb not found; did you initialize the git submodule?\n\
+             Run: git submodule update --init --recursive",
+        );
 
     let dst =
         cmake::Config::new(&vdb_src).define("LIBS_ONLY", "ON").build_target("ncbi-vdb").build();
@@ -66,24 +92,24 @@ fn build_ncbi_vdb(_out_dir: &Path) -> (PathBuf, PathBuf) {
 
     // cmake puts the static uber-library in lib/, and helper libs in ilib/.
     let lib_dir = build_dir.join("lib");
-    let ilib_dir = build_dir.join("ilib");
+    let helper_lib_dir = build_dir.join("ilib");
 
     // Determine which directory contains the uber-library.
     let final_lib_dir = if lib_dir.join("libncbi-vdb.a").exists() {
         lib_dir
-    } else if ilib_dir.join("libncbi-vdb.a").exists() {
-        ilib_dir.clone()
+    } else if helper_lib_dir.join("libncbi-vdb.a").exists() {
+        helper_lib_dir.clone()
     } else {
         panic!(
             "libncbi-vdb.a not found after cmake build. Searched:\n  {}\n  {}",
             lib_dir.join("libncbi-vdb.a").display(),
-            ilib_dir.join("libncbi-vdb.a").display()
+            helper_lib_dir.join("libncbi-vdb.a").display()
         );
     };
 
     // mbedcrypto is built as a separate static lib in ilib/.
-    if ilib_dir.join("libmbedcrypto.a").exists() {
-        println!("cargo:rustc-link-search=native={}", ilib_dir.display());
+    if helper_lib_dir.join("libmbedcrypto.a").exists() {
+        println!("cargo:rustc-link-search=native={}", helper_lib_dir.display());
         println!("cargo:rustc-link-lib=static=mbedcrypto");
     }
 

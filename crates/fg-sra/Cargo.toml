@@ -15,8 +15,12 @@ readme = "../../README.md"
 [lints]
 workspace = true
 
+[features]
+default = ["vendored"]
+vendored = ["fg-sra-vdb/vendored"]
+
 [dependencies]
-fg-sra-vdb = { path = "../fg-sra-vdb" }
+fg-sra-vdb.workspace = true
 anyhow.workspace = true
 clap = { version = "4", features = ["derive"] }
 crossbeam-channel = "0.5"

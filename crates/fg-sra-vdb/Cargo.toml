@@ -11,6 +11,9 @@ readme = "../../README.md"
 [lints]
 workspace = true
 
+[features]
+vendored = ["fg-sra-vdb-sys/vendored"]
+
 [dependencies]
-fg-sra-vdb-sys = { path = "../fg-sra-vdb-sys" }
+fg-sra-vdb-sys.workspace = true
 anyhow.workspace = true

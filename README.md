@@ -39,7 +39,7 @@ These require reference sequence access via VDB FFI that has not yet been implem
 
 ## Installation
 
-### Building from source
+### Building from source (vendored)
 
 ```bash
 git clone --recurse-submodules https://github.com/fulcrumgenomics/fg-sra
@@ -52,16 +52,17 @@ cargo build --release
 - Rust (stable toolchain)
 - CMake (for building the vendored ncbi-vdb C library)
 
-The vendored ncbi-vdb library is built automatically during `cargo build`.
+The `vendored` feature is enabled by default, building ncbi-vdb from the
+git submodule automatically during `cargo build`.
 
-#### Pre-built VDB
+### Building with a pre-built VDB
 
-To use a pre-installed VDB library instead of building from source, set:
+To link against a system-installed ncbi-vdb instead of building from source:
 
 ```bash
 export VDB_INCDIR=/path/to/ncbi-vdb/interfaces
 export VDB_LIBDIR=/path/to/lib/containing/libncbi-vdb.a
-cargo build --release
+cargo build --release --no-default-features
 ```
 
 ## Usage

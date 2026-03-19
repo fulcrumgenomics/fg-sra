@@ -14,6 +14,8 @@ repository = "https://github.com/fulcrumgenomics/fg-sra"
 license = "MIT"
 
 [workspace.dependencies]
+fg-sra-vdb-sys = { version = "0.1.0", path = "crates/fg-sra-vdb-sys", default-features = false }
+fg-sra-vdb = { version = "0.1.0", path = "crates/fg-sra-vdb", default-features = false }
 anyhow = "1"
 
 [workspace.lints.clippy]
