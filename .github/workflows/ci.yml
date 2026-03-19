@@ -55,6 +55,7 @@ jobs:
     name: coverage
     runs-on: ubuntu-latest
     if: github.actor != 'dependabot[bot]'
+    environment: github-actions
     steps:
       - uses: actions/checkout@v4
         with:
