@@ -40,7 +40,7 @@ impl VdbDependencies {
         retry_on_network_error("VDatabaseListDependencies", || {
             let mut dep: *const fg_sra_vdb_sys::VDBDependencies = ptr::null();
             let rc = unsafe {
-                fg_sra_vdb_sys::VDatabaseListDependencies(db.as_ptr(), &mut dep, missing_only)
+                fg_sra_vdb_sys::VDatabaseListDependencies(db.as_ptr(), &raw mut dep, missing_only)
             };
             check_rc(rc)?;
             Ok(Self { ptr: dep })
@@ -50,7 +50,7 @@ impl VdbDependencies {
     /// Get the number of dependencies.
     pub fn count(&self) -> Result<u32, VdbError> {
         let mut count: u32 = 0;
-        let rc = unsafe { fg_sra_vdb_sys::VDBDependenciesCount(self.ptr, &mut count) };
+        let rc = unsafe { fg_sra_vdb_sys::VDBDependenciesCount(self.ptr, &raw mut count) };
         check_rc(rc)?;
         Ok(count)
     }
@@ -58,7 +58,7 @@ impl VdbDependencies {
     /// Get the sequence ID of the dependency at `idx`.
     pub fn seq_id(&self, idx: u32) -> Result<String, VdbError> {
         let mut seq_id: *const std::os::raw::c_char = ptr::null();
-        let rc = unsafe { fg_sra_vdb_sys::VDBDependenciesSeqId(self.ptr, &mut seq_id, idx) };
+        let rc = unsafe { fg_sra_vdb_sys::VDBDependenciesSeqId(self.ptr, &raw mut seq_id, idx) };
         check_rc(rc)?;
         if seq_id.is_null() {
             return Ok(String::new());
@@ -70,7 +70,7 @@ impl VdbDependencies {
     /// Get whether the dependency at `idx` is available locally.
     pub fn local(&self, idx: u32) -> Result<bool, VdbError> {
         let mut local: bool = false;
-        let rc = unsafe { fg_sra_vdb_sys::VDBDependenciesLocal(self.ptr, &mut local, idx) };
+        let rc = unsafe { fg_sra_vdb_sys::VDBDependenciesLocal(self.ptr, &raw mut local, idx) };
         check_rc(rc)?;
         Ok(local)
     }

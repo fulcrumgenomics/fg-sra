@@ -8,6 +8,9 @@ license.workspace = true
 description = "Safe Rust wrappers over the NCBI VDB C library"
 readme = "../../README.md"
 
+[lints]
+workspace = true
+
 [dependencies]
 fg-sra-vdb-sys = { path = "../fg-sra-vdb-sys" }
 anyhow.workspace = true

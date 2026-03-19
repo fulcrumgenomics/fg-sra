@@ -59,14 +59,12 @@ pub fn generate_header(
 ///
 /// Returns `Ok(None)` if the node does not exist, `Ok(Some(header))` if found.
 fn read_bam_header(db: &VDatabase) -> Result<Option<String>> {
-    let meta = match db.open_metadata_read() {
-        Ok(m) => m,
-        Err(_) => return Ok(None),
+    let Ok(meta) = db.open_metadata_read() else {
+        return Ok(None);
     };
 
-    let node = match meta.open_node_read("BAM_HEADER") {
-        Ok(n) => n,
-        Err(_) => return Ok(None),
+    let Ok(node) = meta.open_node_read("BAM_HEADER") else {
+        return Ok(None);
     };
 
     let content = node.read_all().context("failed to read BAM_HEADER metadata node")?;

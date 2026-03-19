@@ -28,7 +28,7 @@ impl VdbManager {
     pub fn make_read() -> Result<Self, VdbError> {
         let mut mgr: *const fg_sra_vdb_sys::VDBManager = ptr::null();
         // Safety: VDBManagerMakeRead initializes mgr; we pass NULL for default directory.
-        let rc = unsafe { fg_sra_vdb_sys::VDBManagerMakeRead(&mut mgr, ptr::null()) };
+        let rc = unsafe { fg_sra_vdb_sys::VDBManagerMakeRead(&raw mut mgr, ptr::null()) };
         check_rc(rc)?;
         Ok(Self { ptr: mgr })
     }
@@ -51,7 +51,7 @@ impl VdbManager {
         let rc = unsafe {
             fg_sra_vdb_sys::VDBManagerOpenDBRead(
                 self.ptr,
-                &mut db,
+                &raw mut db,
                 ptr::null(), // schema (NULL = use default)
                 c_path.as_ptr(),
             )

@@ -5,8 +5,15 @@ edition.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 license.workspace = true
-description = "High-performance SRA toolkit"
+description = "High-performance SRA-to-SAM/BAM converter replacing NCBI sam-dump"
+authors = ["Nils Homer <nils@fulcrumgenomics.com>"]
+homepage = "https://github.com/fulcrumgenomics/fg-sra"
+categories = ["command-line-utilities", "science"]
+keywords = ["bioinformatics", "sra", "sam", "bam", "ngs"]
 readme = "../../README.md"
+
+[lints]
+workspace = true
 
 [dependencies]
 fg-sra-vdb = { path = "../fg-sra-vdb" }

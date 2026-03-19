@@ -29,6 +29,7 @@ pub enum Command {
 
 /// Convert NCBI SRA archives to SAM or BAM format, replacing `sam-dump`
 /// with multi-threaded processing for significantly higher throughput.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Parser)]
 pub struct ToSam {
     /// SRA accession(s) or file path(s) to convert.
@@ -68,7 +69,7 @@ pub struct ToSam {
     #[arg(long = "header-comment")]
     pub header_comment: Vec<String>,
 
-    /// Use SEQ_ID instead of NAME for RNAME.
+    /// Use `SEQ_ID` instead of NAME for RNAME.
     #[arg(short = 's', long = "seqid")]
     pub seqid: bool,
 
@@ -110,7 +111,7 @@ pub struct ToSam {
     #[arg(short = 'c', long = "cigar-long")]
     pub cigar_long: bool,
 
-    /// Append .SPOT_GROUP to QNAME.
+    /// Append `.SPOT_GROUP` to QNAME.
     #[arg(short = 'g', long = "spot-group")]
     pub spot_group: bool,
 
@@ -191,7 +192,7 @@ impl CacheRefs {
         }
 
         let num_ok = self.accessions.len() - num_failed;
-        eprintln!("[cache-refs] Done: {} accession(s) processed, {} failed", num_ok, num_failed);
+        eprintln!("[cache-refs] Done: {num_ok} accession(s) processed, {num_failed} failed");
 
         if num_failed > 0 {
             anyhow::bail!(
@@ -204,6 +205,7 @@ impl CacheRefs {
     }
 
     /// Process a single accession: open database, list dependencies, report results.
+    #[allow(clippy::unused_self)]
     fn process_accession(&self, accession: &str) -> Result<()> {
         eprintln!("[cache-refs] {accession}: resolving dependencies...");
 
@@ -249,6 +251,8 @@ impl ToSam {
         use crate::progress::ProgressLogger;
         use crate::record::FormatOptions;
         use crate::unaligned::process_unaligned_reads;
+
+        const PROGRESS_INTERVAL: u64 = 1_000_000;
 
         let db = open_database(accession)?;
 
@@ -326,14 +330,12 @@ impl ToSam {
             primary_only: self.primary,
             min_mapq: self.min_mapq,
             num_threads: self.threads.unwrap_or_else(|| {
-                std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1)
+                std::thread::available_parallelism().map(std::num::NonZero::get).unwrap_or(1)
             }),
             pool_size_override: self.pool_size,
             opts: &opts,
             regions: &self.aligned_region,
         };
-
-        const PROGRESS_INTERVAL: u64 = 1_000_000;
 
         // Aligned reads (unless --unaligned-spots-only).
         if !self.unaligned_spots_only {
@@ -363,14 +365,14 @@ mod tests {
 
     use super::*;
 
-    /// Parse a ToSam subcommand from a slice of arguments (program name auto-prepended).
+    /// Parse a `ToSam` subcommand from a slice of arguments (program name auto-prepended).
     fn parse(args: &[&str]) -> ToSam {
         let mut full = vec!["fg-sra", "tosam"];
         full.extend_from_slice(args);
         let cli = Cli::parse_from(full);
         match cli.command {
             Command::ToSam(cmd) => cmd,
-            _ => panic!("expected ToSam command"),
+            Command::CacheRefs(_) => panic!("expected ToSam command"),
         }
     }
 
@@ -504,7 +506,7 @@ mod tests {
         let cli = Cli::parse_from(full);
         match cli.command {
             Command::CacheRefs(cmd) => cmd,
-            _ => panic!("expected CacheRefs command"),
+            Command::ToSam(_) => panic!("expected CacheRefs command"),
         }
     }
 

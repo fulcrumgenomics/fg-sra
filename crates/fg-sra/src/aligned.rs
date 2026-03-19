@@ -53,7 +53,7 @@ impl AlignConfig<'_> {
 
     /// Convert `min_mapq` to `i32` for post-read filtering.
     fn min_mapq_i32(&self) -> i32 {
-        self.min_mapq.map(|m| m as i32).unwrap_or(0)
+        self.min_mapq.map_or(0, |m| m as i32)
     }
 
     /// Compute the resource pool size (number of VDB cursors).
@@ -196,7 +196,7 @@ struct RefBoundary {
 
 /// Discover per-reference alignment row ranges by probing the `REF_NAME` column.
 ///
-/// Since PRIMARY_ALIGNMENT rows are contiguous per reference and ordered by
+/// Since `PRIMARY_ALIGNMENT` rows are contiguous per reference and ordered by
 /// reference index, we can find boundaries with a linear scan over reference
 /// transitions using binary search to find each transition point.
 ///
@@ -264,9 +264,9 @@ fn find_ref_boundaries(
 struct RowRangeWorkItem {
     /// Contiguous index into the work list, used for ordered output.
     order_idx: usize,
-    /// Reference index (for BAM ref_id encoding).
+    /// Reference index (for BAM `ref_id` encoding).
     ref_idx: u32,
-    /// Reference name (pre-resolved, avoids per-worker ReferenceList).
+    /// Reference name (pre-resolved, avoids per-worker `ReferenceList`).
     ref_name: String,
     /// First alignment row ID (inclusive).
     start_row: i64,
@@ -615,7 +615,7 @@ fn process_table_parallel(
                 resource_pool_tx: resource_pool_tx.clone(),
             };
             worker_handles.push(
-                s.spawn(move || -> Result<()> { pool_worker_loop(channels, config, progress) }),
+                s.spawn(move || -> Result<()> { pool_worker_loop(&channels, config, progress) }),
             );
         }
         // Drop our copies so only workers hold channel ends.
@@ -648,10 +648,10 @@ fn process_table_parallel(
     })
 }
 
-/// Collect ResultChunks from workers and write them in reference order.
+/// Collect `ResultChunk`s from workers and write them in reference order.
 ///
 /// Chunks arrive out of order from multiple workers. This function buffers
-/// them and writes in strict (order_idx, chunk_seq) order, flushing as soon
+/// them and writes in strict (`order_idx`, `chunk_seq`) order, flushing as soon
 /// as the next expected chunk becomes available. Written buffers are returned
 /// to workers via `pool_tx` for reuse.
 fn collect_ordered_chunks(
@@ -741,9 +741,9 @@ struct WorkerState {
 }
 
 /// Worker loop: check out VDB resources from the pool per work item, process,
-/// then return them. This bounds total VDB memory to pool_size × per-set cost.
+/// then return them. This bounds total VDB memory to `pool_size` × per-set cost.
 fn pool_worker_loop(
-    channels: PoolWorkerChannels,
+    channels: &PoolWorkerChannels,
     config: &AlignConfig<'_>,
     progress: &ProgressLogger,
 ) -> Result<()> {

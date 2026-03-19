@@ -15,6 +15,7 @@ use flate2::write::GzEncoder;
 const OUTPUT_BUF_SIZE: usize = 256 * 1024;
 
 /// Compression mode for text output.
+#[derive(Clone, Copy)]
 pub enum CompressionMode {
     None,
     Gzip,
@@ -202,7 +203,7 @@ mod tests {
     fn test_parse_sq_lines() {
         let header = "@HD\tVN:1.6\n@SQ\tSN:chr1\tLN:248956422\n@SQ\tSN:chr2\tLN:242193529\n";
         let refs = parse_sq_lines(header);
-        assert_eq!(refs, vec![("chr1", 248956422), ("chr2", 242193529)]);
+        assert_eq!(refs, vec![("chr1", 248_956_422), ("chr2", 242_193_529)]);
     }
 
     #[test]

@@ -62,7 +62,7 @@ mod tests {
 
     /// Build a network error with module=18.
     fn network_error() -> VdbError {
-        VdbError::new(0x900995d8)
+        VdbError::new(0x9009_95d8)
     }
 
     /// Build a non-network error with module=10.

@@ -16,6 +16,19 @@ license = "MIT"
 [workspace.dependencies]
 anyhow = "1"
 
+[workspace.lints.clippy]
+pedantic = { level = "deny", priority = -1 }
+# Allow specific pedantic lints that are too noisy for this codebase.
+# FFI and BAM binary encoding require pervasive integer casts that are
+# correct by construction but trigger pedantic cast warnings.
+cast_possible_truncation = "allow"
+cast_possible_wrap = "allow"
+cast_precision_loss = "allow"
+cast_sign_loss = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+module_name_repetitions = "allow"
+
 [profile.release]
 lto = "fat"
 codegen-units = 1

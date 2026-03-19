@@ -10,7 +10,7 @@ use crate::error::{VdbError, check_rc, to_cstring};
 use crate::retry::retry_on_network_error;
 
 /// Sentinel value for columns that were never added or are not available.
-pub const INVALID_COLUMN: u32 = 0xFFFFFFFF;
+pub const INVALID_COLUMN: u32 = 0xFFFF_FFFF;
 
 /// Safe wrapper around the VDB `VCursor` opaque type.
 ///
@@ -35,7 +35,8 @@ impl VCursor {
     pub fn add_column(&self, name: &str) -> Result<u32, VdbError> {
         let c_name = to_cstring(name)?;
         let mut idx: u32 = 0;
-        let rc = unsafe { fg_sra_vdb_sys::VCursorAddColumn(self.ptr, &mut idx, c_name.as_ptr()) };
+        let rc =
+            unsafe { fg_sra_vdb_sys::VCursorAddColumn(self.ptr, &raw mut idx, c_name.as_ptr()) };
         check_rc(rc)?;
         Ok(idx)
     }
@@ -43,6 +44,7 @@ impl VCursor {
     /// Add a column, returning `None` if the column does not exist.
     ///
     /// This is equivalent to `add_opt_column` in the C implementation.
+    #[must_use]
     pub fn add_column_optional(&self, name: &str) -> Option<u32> {
         self.add_column(name).ok()
     }
@@ -59,8 +61,9 @@ impl VCursor {
     pub fn id_range(&self, col_idx: u32) -> Result<(i64, u64), VdbError> {
         let mut first: i64 = 0;
         let mut count: u64 = 0;
-        let rc =
-            unsafe { fg_sra_vdb_sys::VCursorIdRange(self.ptr, col_idx, &mut first, &mut count) };
+        let rc = unsafe {
+            fg_sra_vdb_sys::VCursorIdRange(self.ptr, col_idx, &raw mut first, &raw mut count)
+        };
         check_rc(rc)?;
         Ok((first, count))
     }
@@ -79,7 +82,7 @@ impl VCursor {
             return Ok(T::default());
         }
         debug_assert_eq!(data.elem_bits, expected_bits);
-        Ok(unsafe { *(data.base as *const T) })
+        Ok(unsafe { *data.base.cast::<T>() })
     }
 
     /// Read a slice of values from a multi-element cell.
@@ -96,7 +99,7 @@ impl VCursor {
             return Ok(Vec::new());
         }
         debug_assert_eq!(data.elem_bits, expected_bits);
-        let values = unsafe { slice::from_raw_parts(data.base as *const T, data.row_len as usize) };
+        let values = unsafe { slice::from_raw_parts(data.base.cast::<T>(), data.row_len as usize) };
         Ok(values.to_vec())
     }
 
@@ -135,7 +138,7 @@ impl VCursor {
             return Ok(String::new());
         }
         debug_assert_eq!(data.elem_bits, 8);
-        let bytes = unsafe { slice::from_raw_parts(data.base as *const u8, data.row_len as usize) };
+        let bytes = unsafe { slice::from_raw_parts(data.base.cast::<u8>(), data.row_len as usize) };
         Ok(String::from_utf8_lossy(bytes).into_owned())
     }
 
@@ -156,7 +159,7 @@ impl VCursor {
             return Ok(());
         }
         debug_assert_eq!(data.elem_bits, 8);
-        let bytes = unsafe { slice::from_raw_parts(data.base as *const u8, data.row_len as usize) };
+        let bytes = unsafe { slice::from_raw_parts(data.base.cast::<u8>(), data.row_len as usize) };
         // VDB ASCII columns are always valid UTF-8; from_utf8_lossy borrows
         // without allocation in the common (valid) case.
         buf.push_str(&String::from_utf8_lossy(bytes));
@@ -173,22 +176,22 @@ impl VCursor {
         self.read_slice(row_id, col_idx, 64)
     }
 
-    /// Read a slice of `u32` values (e.g., INSDC_coord_len).
+    /// Read a slice of `u32` values (e.g., `INSDC_coord_len`).
     pub fn read_u32_slice(&self, row_id: i64, col_idx: u32) -> Result<Vec<u32>, VdbError> {
         self.read_slice(row_id, col_idx, 32)
     }
 
-    /// Read a slice of `i32` values (e.g., INSDC_coord_zero).
+    /// Read a slice of `i32` values (e.g., `INSDC_coord_zero`).
     pub fn read_i32_slice(&self, row_id: i64, col_idx: u32) -> Result<Vec<i32>, VdbError> {
         self.read_slice(row_id, col_idx, 32)
     }
 
-    /// Read an INSDC_coord_zero value (0-based coordinate, i32).
+    /// Read an `INSDC_coord_zero` value (0-based coordinate, i32).
     pub fn read_coord_zero(&self, row_id: i64, col_idx: u32) -> Result<i32, VdbError> {
         self.read_i32(row_id, col_idx)
     }
 
-    /// Read an INSDC_coord_len value (length, u32).
+    /// Read an `INSDC_coord_len` value (length, u32).
     pub fn read_coord_len(&self, row_id: i64, col_idx: u32) -> Result<u32, VdbError> {
         self.read_u32(row_id, col_idx)
     }
@@ -208,10 +211,10 @@ impl VCursor {
                     self.ptr,
                     row_id,
                     col_idx,
-                    &mut elem_bits,
-                    &mut base,
-                    &mut boff,
-                    &mut row_len,
+                    &raw mut elem_bits,
+                    &raw mut base,
+                    &raw mut boff,
+                    &raw mut row_len,
                 )
             };
             check_rc(rc)?;
@@ -219,7 +222,7 @@ impl VCursor {
         })
     }
 
-    /// Get the raw cursor pointer (for passing to PlacementIterator creation).
+    /// Get the raw cursor pointer (for passing to `PlacementIterator` creation).
     pub(crate) fn as_ptr(&self) -> *const fg_sra_vdb_sys::VCursor {
         self.ptr
     }
@@ -233,7 +236,7 @@ impl Drop for VCursor {
     }
 }
 
-/// Raw cell data from VCursorCellDataDirect.
+/// Raw cell data from `VCursorCellDataDirect`.
 struct CellData {
     elem_bits: u32,
     base: *const std::ffi::c_void,

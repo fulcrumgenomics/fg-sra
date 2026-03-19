@@ -32,8 +32,8 @@ impl ProgressLogger {
     }
 
     /// Record `additional` processed records.  Emits a log line for each
-    /// interval boundary crossed (e.g. if interval=1_000_000 and we go from
-    /// 999_998 to 1_000_002, one line is emitted for the 1_000_000 crossing).
+    /// interval boundary crossed (e.g. if `interval=1_000_000` and we go from
+    /// `999_998` to `1_000_002`, one line is emitted for the `1_000_000` crossing).
     pub fn record(&self, additional: u64) {
         let prev = self.record_count.fetch_add(additional, Ordering::Relaxed);
         if self.interval == 0 {

@@ -20,12 +20,13 @@ cargo build --release
 We use pre-commit hooks to ensure code quality. Install them after cloning:
 
 ```bash
-./scripts/install-hooks
+./scripts/install-hooks.sh
 ```
 
-This installs hooks that run before each commit:
+This installs hooks (via symlink, so updates propagate automatically) that
+run before each commit:
 - `cargo ci-fmt` - Check code formatting
-- `cargo ci-lint` - Run clippy lints
+- `cargo ci-lint` - Run clippy lints (pedantic)
 
 ### Running Checks Manually
 
@@ -33,17 +34,17 @@ This installs hooks that run before each commit:
 # Format check (fails if formatting differs)
 cargo ci-fmt
 
-# Lint check (fails on any warnings)
+# Lint check (fails on any warnings, pedantic enabled)
 cargo ci-lint
 
-# Run all tests
+# Run all tests (uses nextest)
 cargo ci-test
 ```
 
 ## Code Style
 
 - Run `cargo fmt` before committing
-- Fix all clippy warnings
+- Fix all clippy warnings (including pedantic)
 - Add backticks around identifiers in doc comments (e.g., `` `read_name` ``)
 
 ## Testing

@@ -1,4 +1,4 @@
 [alias]
-ci-test = "test --all --locked"
+ci-test = "nextest run --all --locked --no-tests=pass"
 ci-fmt = "fmt --all -- --check"
 ci-lint = "clippy --all-features --all-targets -- -D warnings"

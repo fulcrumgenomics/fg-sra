@@ -65,9 +65,9 @@ fn setup_seq_cursor(db: &VDatabase) -> Result<(VCursor, SeqColumnIndices)> {
 /// Process unaligned reads from the SEQUENCE table.
 ///
 /// For each spot, iterates over reads and outputs those that are:
-/// - Biological (READ_TYPE has biological bit set)
-/// - Unaligned (PRIMARY_ALIGNMENT_ID == 0 for that read)
-/// - Non-empty (READ_LEN > 0)
+/// - Biological (`READ_TYPE` has biological bit set)
+/// - Unaligned (`PRIMARY_ALIGNMENT_ID` == 0 for that read)
+/// - Non-empty (`READ_LEN` > 0)
 pub fn process_unaligned_reads(
     db: &VDatabase,
     writer: &mut OutputWriter,

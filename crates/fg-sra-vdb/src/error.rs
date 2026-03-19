@@ -29,11 +29,13 @@ const RC_MODULE_NETWORK: u32 = 18;
 
 impl VdbError {
     /// Create a new `VdbError` from a raw `rc_t` value.
+    #[must_use]
     pub fn new(rc: u32) -> Self {
         Self::Rc(rc)
     }
 
     /// Returns `true` if this error represents the "done" state (end of iteration).
+    #[must_use]
     pub fn is_done(&self) -> bool {
         matches!(self, Self::Rc(rc) if rc & 0x3F == RC_STATE_DONE)
     }
@@ -41,11 +43,13 @@ impl VdbError {
     /// Returns `true` if this error is a network error (`module == rcNS == 18`).
     ///
     /// Network errors are transient and may be retried.
+    #[must_use]
     pub fn is_network_error(&self) -> bool {
         self.module() == RC_MODULE_NETWORK
     }
 
     /// Extract the raw `rc_t` value, or `None` for non-rc errors.
+    #[must_use]
     pub fn rc(&self) -> Option<u32> {
         match self {
             Self::Rc(rc) => Some(*rc),
@@ -54,42 +58,47 @@ impl VdbError {
     }
 
     /// Extract the State field (bits 0-5).
+    #[must_use]
     pub fn state(&self) -> u32 {
         match self {
             Self::Rc(rc) => rc & 0x3F,
-            _ => 0,
+            Self::InvalidNulByte => 0,
         }
     }
 
     /// Extract the Object field (bits 6-13).
+    #[must_use]
     pub fn object(&self) -> u32 {
         match self {
             Self::Rc(rc) => (rc >> 6) & 0xFF,
-            _ => 0,
+            Self::InvalidNulByte => 0,
         }
     }
 
     /// Extract the Context field (bits 14-20).
+    #[must_use]
     pub fn context(&self) -> u32 {
         match self {
             Self::Rc(rc) => (rc >> 14) & 0x7F,
-            _ => 0,
+            Self::InvalidNulByte => 0,
         }
     }
 
     /// Extract the Target field (bits 21-26).
+    #[must_use]
     pub fn target(&self) -> u32 {
         match self {
             Self::Rc(rc) => (rc >> 21) & 0x3F,
-            _ => 0,
+            Self::InvalidNulByte => 0,
         }
     }
 
     /// Extract the Module field (bits 27-31).
+    #[must_use]
     pub fn module(&self) -> u32 {
         match self {
             Self::Rc(rc) => (rc >> 27) & 0x1F,
-            _ => 0,
+            Self::InvalidNulByte => 0,
         }
     }
 }
@@ -194,7 +203,7 @@ mod tests {
     #[test]
     fn test_is_network_error_specific_rc() {
         // The specific rc observed in production: 0x900995d8
-        let err = VdbError::new(0x900995d8);
+        let err = VdbError::new(0x9009_95d8);
         assert!(err.is_network_error());
         assert_eq!(err.module(), 18);
     }

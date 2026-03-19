@@ -27,13 +27,15 @@ impl VDatabase {
     pub fn open_table_read(&self, name: &str) -> Result<VTable, VdbError> {
         let c_name = to_cstring(name)?;
         let mut tbl: *const fg_sra_vdb_sys::VTable = ptr::null();
-        let rc =
-            unsafe { fg_sra_vdb_sys::VDatabaseOpenTableRead(self.ptr, &mut tbl, c_name.as_ptr()) };
+        let rc = unsafe {
+            fg_sra_vdb_sys::VDatabaseOpenTableRead(self.ptr, &raw mut tbl, c_name.as_ptr())
+        };
         check_rc(rc)?;
         Ok(VTable::from_raw(tbl))
     }
 
     /// Check if a table exists in this database.
+    #[must_use]
     pub fn has_table(&self, name: &str) -> bool {
         self.open_table_read(name).is_ok()
     }
@@ -41,7 +43,7 @@ impl VDatabase {
     /// List all table names in this database.
     pub fn list_tables(&self) -> Result<Vec<String>, VdbError> {
         let mut names: *mut fg_sra_vdb_sys::KNamelist = ptr::null_mut();
-        let rc = unsafe { fg_sra_vdb_sys::VDatabaseListTbl(self.ptr, &mut names) };
+        let rc = unsafe { fg_sra_vdb_sys::VDatabaseListTbl(self.ptr, &raw mut names) };
         check_rc(rc)?;
         let result = read_namelist(names);
         unsafe { fg_sra_vdb_sys::KNamelistRelease(names) };
@@ -51,7 +53,7 @@ impl VDatabase {
     /// Open the database metadata for reading.
     pub fn open_metadata_read(&self) -> Result<KMetadata, VdbError> {
         let mut meta: *const fg_sra_vdb_sys::KMetadata = ptr::null();
-        let rc = unsafe { fg_sra_vdb_sys::VDatabaseOpenMetadataRead(self.ptr, &mut meta) };
+        let rc = unsafe { fg_sra_vdb_sys::VDatabaseOpenMetadataRead(self.ptr, &raw mut meta) };
         check_rc(rc)?;
         Ok(KMetadata { ptr: meta })
     }
@@ -93,7 +95,7 @@ impl VTable {
     /// Create a read cursor on this table.
     pub fn create_cursor_read(&self) -> Result<VCursor, VdbError> {
         let mut curs: *const fg_sra_vdb_sys::VCursor = ptr::null();
-        let rc = unsafe { fg_sra_vdb_sys::VTableCreateCursorRead(self.ptr, &mut curs) };
+        let rc = unsafe { fg_sra_vdb_sys::VTableCreateCursorRead(self.ptr, &raw mut curs) };
         check_rc(rc)?;
         Ok(VCursor::from_raw(curs))
     }
@@ -101,8 +103,9 @@ impl VTable {
     /// Create a cached read cursor with the given cache capacity in bytes.
     pub fn create_cached_cursor_read(&self, capacity: usize) -> Result<VCursor, VdbError> {
         let mut curs: *const fg_sra_vdb_sys::VCursor = ptr::null();
-        let rc =
-            unsafe { fg_sra_vdb_sys::VTableCreateCachedCursorRead(self.ptr, &mut curs, capacity) };
+        let rc = unsafe {
+            fg_sra_vdb_sys::VTableCreateCachedCursorRead(self.ptr, &raw mut curs, capacity)
+        };
         check_rc(rc)?;
         Ok(VCursor::from_raw(curs))
     }
@@ -110,7 +113,7 @@ impl VTable {
     /// List readable column names.
     pub fn list_readable_columns(&self) -> Result<Vec<String>, VdbError> {
         let mut names: *mut fg_sra_vdb_sys::KNamelist = ptr::null_mut();
-        let rc = unsafe { fg_sra_vdb_sys::VTableListReadableColumns(self.ptr, &mut names) };
+        let rc = unsafe { fg_sra_vdb_sys::VTableListReadableColumns(self.ptr, &raw mut names) };
         check_rc(rc)?;
         let result = read_namelist(names);
         unsafe { fg_sra_vdb_sys::KNamelistRelease(names) };
@@ -141,8 +144,9 @@ impl KMetadata {
     pub fn open_node_read(&self, path: &str) -> Result<KMDataNode, VdbError> {
         let c_path = to_cstring(path)?;
         let mut node: *const fg_sra_vdb_sys::KMDataNode = ptr::null();
-        let rc =
-            unsafe { fg_sra_vdb_sys::KMetadataOpenNodeRead(self.ptr, &mut node, c_path.as_ptr()) };
+        let rc = unsafe {
+            fg_sra_vdb_sys::KMetadataOpenNodeRead(self.ptr, &raw mut node, c_path.as_ptr())
+        };
         check_rc(rc)?;
         Ok(KMDataNode { ptr: node })
     }
@@ -172,10 +176,10 @@ impl KMDataNode {
             fg_sra_vdb_sys::KMDataNodeRead(
                 self.ptr,
                 offset,
-                buffer.as_mut_ptr() as *mut std::ffi::c_void,
+                buffer.as_mut_ptr().cast::<std::ffi::c_void>(),
                 buffer.len(),
-                &mut num_read,
-                &mut remaining,
+                &raw mut num_read,
+                &raw mut remaining,
             )
         };
         check_rc(rc)?;
@@ -207,16 +211,16 @@ impl Drop for KMDataNode {
     }
 }
 
-/// Read all strings from a KNamelist.
+/// Read all strings from a `KNamelist`.
 fn read_namelist(names: *const fg_sra_vdb_sys::KNamelist) -> Result<Vec<String>, VdbError> {
     let mut count: u32 = 0;
-    let rc = unsafe { fg_sra_vdb_sys::KNamelistCount(names, &mut count) };
+    let rc = unsafe { fg_sra_vdb_sys::KNamelistCount(names, &raw mut count) };
     check_rc(rc)?;
 
     let mut result = Vec::with_capacity(count as usize);
     for i in 0..count {
         let mut name: *const std::os::raw::c_char = ptr::null();
-        let rc = unsafe { fg_sra_vdb_sys::KNamelistGet(names, i, &mut name) };
+        let rc = unsafe { fg_sra_vdb_sys::KNamelistGet(names, i, &raw mut name) };
         check_rc(rc)?;
         if !name.is_null() {
             let s = unsafe { std::ffi::CStr::from_ptr(name) };

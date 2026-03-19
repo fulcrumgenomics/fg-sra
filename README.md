@@ -1,5 +1,6 @@
 [![Build](https://github.com/fulcrumgenomics/fg-sra/actions/workflows/ci.yml/badge.svg)](https://github.com/fulcrumgenomics/fg-sra/actions/workflows/ci.yml)
 [![License](http://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/fulcrumgenomics/fg-sra/blob/main/LICENSE)
+[![codecov](https://codecov.io/gh/fulcrumgenomics/fg-sra/branch/main/graph/badge.svg)](https://codecov.io/gh/fulcrumgenomics/fg-sra)
 
 # fg-sra
 

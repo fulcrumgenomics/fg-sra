@@ -40,7 +40,7 @@ impl ReferenceList {
             let mut reflist: *const fg_sra_vdb_sys::ReferenceList = ptr::null();
             let rc = unsafe {
                 fg_sra_vdb_sys::ReferenceList_MakeDatabase(
-                    &mut reflist,
+                    &raw mut reflist,
                     db.as_ptr(),
                     options,
                     cache,
@@ -57,7 +57,7 @@ impl ReferenceList {
     pub fn count(&self) -> Result<u32, VdbError> {
         retry_on_network_error("ReferenceList_Count", || {
             let mut count: u32 = 0;
-            let rc = unsafe { fg_sra_vdb_sys::ReferenceList_Count(self.ptr, &mut count) };
+            let rc = unsafe { fg_sra_vdb_sys::ReferenceList_Count(self.ptr, &raw mut count) };
             check_rc(rc)?;
             Ok(count)
         })
@@ -67,7 +67,7 @@ impl ReferenceList {
     pub fn get(&self, idx: u32) -> Result<ReferenceObj, VdbError> {
         retry_on_network_error("ReferenceList_Get", || {
             let mut obj: *const fg_sra_vdb_sys::ReferenceObj = ptr::null();
-            let rc = unsafe { fg_sra_vdb_sys::ReferenceList_Get(self.ptr, &mut obj, idx) };
+            let rc = unsafe { fg_sra_vdb_sys::ReferenceList_Get(self.ptr, &raw mut obj, idx) };
             check_rc(rc)?;
             Ok(ReferenceObj { ptr: obj })
         })
@@ -81,7 +81,7 @@ impl ReferenceList {
             let rc = unsafe {
                 fg_sra_vdb_sys::ReferenceList_Find(
                     self.ptr,
-                    &mut obj,
+                    &raw mut obj,
                     c_name.as_ptr(),
                     c_name.as_bytes().len(),
                 )
@@ -92,6 +92,7 @@ impl ReferenceList {
     }
 
     /// Iterate over all references.
+    #[allow(clippy::iter_not_returning_iterator)]
     pub fn iter(&self) -> Result<ReferenceIter<'_>, VdbError> {
         let count = self.count()?;
         Ok(ReferenceIter { reflist: self, idx: 0, count })
@@ -119,7 +120,7 @@ pub struct ReferenceIter<'a> {
     count: u32,
 }
 
-impl<'a> Iterator for ReferenceIter<'a> {
+impl Iterator for ReferenceIter<'_> {
     type Item = Result<ReferenceObj, VdbError>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -153,7 +154,7 @@ impl ReferenceObj {
         ref_obj_name(self.ptr)
     }
 
-    /// Get the sequence ID (e.g., "NC_000001.11").
+    /// Get the sequence ID (e.g., "`NC_000001.11`").
     pub fn seq_id(&self) -> Result<String, VdbError> {
         ref_obj_seq_id(self.ptr)
     }
@@ -162,7 +163,7 @@ impl ReferenceObj {
     pub fn seq_length(&self) -> Result<u32, VdbError> {
         retry_on_network_error("ReferenceObj_SeqLength", || {
             let mut len: u32 = 0;
-            let rc = unsafe { fg_sra_vdb_sys::ReferenceObj_SeqLength(self.ptr, &mut len) };
+            let rc = unsafe { fg_sra_vdb_sys::ReferenceObj_SeqLength(self.ptr, &raw mut len) };
             check_rc(rc)?;
             Ok(len)
         })
@@ -172,7 +173,7 @@ impl ReferenceObj {
     pub fn idx(&self) -> Result<u32, VdbError> {
         retry_on_network_error("ReferenceObj_Idx", || {
             let mut idx: u32 = 0;
-            let rc = unsafe { fg_sra_vdb_sys::ReferenceObj_Idx(self.ptr, &mut idx) };
+            let rc = unsafe { fg_sra_vdb_sys::ReferenceObj_Idx(self.ptr, &raw mut idx) };
             check_rc(rc)?;
             Ok(idx)
         })
@@ -198,7 +199,7 @@ impl Drop for ReferenceObj {
 pub(crate) fn ref_obj_name(ptr: *const fg_sra_vdb_sys::ReferenceObj) -> Result<String, VdbError> {
     retry_on_network_error("ReferenceObj_Name", || {
         let mut name: *const std::os::raw::c_char = ptr::null();
-        let rc = unsafe { fg_sra_vdb_sys::ReferenceObj_Name(ptr, &mut name) };
+        let rc = unsafe { fg_sra_vdb_sys::ReferenceObj_Name(ptr, &raw mut name) };
         check_rc(rc)?;
         if name.is_null() {
             return Ok(String::new());
@@ -214,7 +215,7 @@ pub(crate) fn ref_obj_name(ptr: *const fg_sra_vdb_sys::ReferenceObj) -> Result<S
 pub(crate) fn ref_obj_seq_id(ptr: *const fg_sra_vdb_sys::ReferenceObj) -> Result<String, VdbError> {
     retry_on_network_error("ReferenceObj_SeqId", || {
         let mut seqid: *const std::os::raw::c_char = ptr::null();
-        let rc = unsafe { fg_sra_vdb_sys::ReferenceObj_SeqId(ptr, &mut seqid) };
+        let rc = unsafe { fg_sra_vdb_sys::ReferenceObj_SeqId(ptr, &raw mut seqid) };
         check_rc(rc)?;
         if seqid.is_null() {
             return Ok(String::new());

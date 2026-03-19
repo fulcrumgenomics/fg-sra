@@ -70,16 +70,12 @@ fn test_metadata_read() {
     let meta = db.open_metadata_read().expect("failed to open metadata");
 
     // BAM_HEADER may or may not exist, but the metadata API should work.
-    match meta.open_node_read("BAM_HEADER") {
-        Ok(node) => {
-            let header = node.read_all().expect("failed to read BAM_HEADER node");
-            assert!(
-                header.starts_with("@HD") || header.starts_with("@SQ"),
-                "expected SAM header content"
-            );
-        }
-        Err(_) => {
-            // Not all accessions have BAM_HEADER — that's OK.
-        }
+    if let Ok(node) = meta.open_node_read("BAM_HEADER") {
+        let header = node.read_all().expect("failed to read BAM_HEADER node");
+        assert!(
+            header.starts_with("@HD") || header.starts_with("@SQ"),
+            "expected SAM header content"
+        );
     }
+    // Not all accessions have BAM_HEADER — that's OK.
 }

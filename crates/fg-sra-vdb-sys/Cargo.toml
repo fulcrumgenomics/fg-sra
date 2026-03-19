@@ -9,6 +9,11 @@ description = "Raw FFI bindings to NCBI's libncbi-vdb C library"
 readme = "../../README.md"
 links = "ncbi-vdb"
 
+# Opt out of workspace pedantic lints — this crate is generated FFI bindings
+# and a build script, neither of which should be held to pedantic standards.
+[lints.clippy]
+pedantic = { level = "allow", priority = -1 }
+
 [build-dependencies]
 bindgen = "0.72"
 cmake = "0.1"

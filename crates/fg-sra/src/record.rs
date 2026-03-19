@@ -91,8 +91,8 @@ impl AlignedColumns {
     /// Strip paired-end flags when the mate has no alignment (`mate_align_id == 0`).
     ///
     /// Matches sam-dump behavior: reads without a mate alignment are output as
-    /// unpaired by clearing PAIRED, PROPER_PAIR, MATE_UNMAPPED, MATE_REVERSE,
-    /// FIRST_IN_PAIR, and LAST_IN_PAIR flag bits.
+    /// unpaired by clearing PAIRED, `PROPER_PAIR`, `MATE_UNMAPPED`, `MATE_REVERSE`,
+    /// `FIRST_IN_PAIR`, and `LAST_IN_PAIR` flag bits.
     pub fn strip_paired_flags(&mut self) {
         self.sam_flags &= !sam_flags::PAIRED_MASK;
     }
@@ -161,6 +161,7 @@ pub enum OutputMode {
 }
 
 /// Options controlling SAM record formatting.
+#[allow(clippy::struct_excessive_bools)]
 pub struct FormatOptions<'a> {
     /// Prepend this prefix to QNAME (e.g. "PRE.name").
     pub prefix: Option<&'a str>,
@@ -195,10 +196,12 @@ pub fn format_aligned_record(
 ) {
     match opts.output_mode {
         OutputMode::Sam => {
-            format_aligned_record_sam(buf, cols, ref_name, ref_pos, mapq, align_id, mate_info, opts)
+            format_aligned_record_sam(
+                buf, cols, ref_name, ref_pos, mapq, align_id, mate_info, opts,
+            );
         }
         OutputMode::Bam => {
-            format_aligned_record_bam(buf, cols, ref_id, ref_pos, mapq, align_id, mate_info, opts)
+            format_aligned_record_bam(buf, cols, ref_id, ref_pos, mapq, align_id, mate_info, opts);
         }
         OutputMode::Fasta => {
             buf.clear();
@@ -341,18 +344,18 @@ fn format_aligned_record_sam(
     }
 
     // Optional tags.
-    write_tag_u32(buf, b"NM", cols.edit_distance);
+    write_tag_u32(buf, *b"NM", cols.edit_distance);
 
     if cols.alignment_count > 0 {
-        write_tag_u32(buf, b"NH", cols.alignment_count as u32);
+        write_tag_u32(buf, *b"NH", u32::from(cols.alignment_count));
     }
 
     if !cols.spot_group.is_empty() {
-        write_tag_str(buf, b"RG", &cols.spot_group);
+        write_tag_str(buf, *b"RG", &cols.spot_group);
     }
 
     if opts.xi_tag {
-        write_tag_i64(buf, b"XI", align_id);
+        write_tag_i64(buf, *b"XI", align_id);
     }
 
     buf.push(b'\n');
@@ -507,7 +510,7 @@ fn format_unaligned_record_sam(
 
     // RG tag
     if !cols.spot_group.is_empty() {
-        write_tag_str(buf, b"RG", cols.spot_group);
+        write_tag_str(buf, *b"RG", cols.spot_group);
     }
 
     buf.push(b'\n');
@@ -578,32 +581,32 @@ fn write_i32(buf: &mut Vec<u8>, val: i32) {
 }
 
 /// Write a SAM tag with integer value: `\tXX:i:val`
-fn write_tag_u32(buf: &mut Vec<u8>, tag: &[u8; 2], val: u32) {
+fn write_tag_u32(buf: &mut Vec<u8>, tag: [u8; 2], val: u32) {
     buf.push(b'\t');
-    buf.extend_from_slice(tag);
+    buf.extend_from_slice(&tag);
     buf.extend_from_slice(b":i:");
     write_u32(buf, val);
 }
 
 /// Write a SAM tag with i64 value: `\tXX:i:val`
-fn write_tag_i64(buf: &mut Vec<u8>, tag: &[u8; 2], val: i64) {
+fn write_tag_i64(buf: &mut Vec<u8>, tag: [u8; 2], val: i64) {
     buf.push(b'\t');
-    buf.extend_from_slice(tag);
+    buf.extend_from_slice(&tag);
     buf.extend_from_slice(b":i:");
     buf.extend_from_slice(itoa::Buffer::new().format(val).as_bytes());
 }
 
 /// Write a SAM tag with string value: `\tXX:Z:val`
-fn write_tag_str(buf: &mut Vec<u8>, tag: &[u8; 2], val: &str) {
+fn write_tag_str(buf: &mut Vec<u8>, tag: [u8; 2], val: &str) {
     buf.push(b'\t');
-    buf.extend_from_slice(tag);
+    buf.extend_from_slice(&tag);
     buf.extend_from_slice(b":Z:");
     buf.extend_from_slice(val.as_bytes());
 }
 
 // ── BAM binary encoding ──────────────────────────────────────────────────
 
-/// Format an aligned record as BAM binary (block_size prefix + record data).
+/// Format an aligned record as BAM binary (`block_size` prefix + record data).
 #[allow(clippy::too_many_arguments)]
 fn format_aligned_record_bam(
     buf: &mut Vec<u8>,
@@ -691,15 +694,15 @@ fn format_aligned_record_bam(
     encode_quality_aligned(buf, cols.quality.as_bytes(), l_seq as usize, opts);
 
     // Aux tags.
-    write_bam_tag_u32(buf, b"NM", cols.edit_distance);
+    write_bam_tag_u32(buf, *b"NM", cols.edit_distance);
     if cols.alignment_count > 0 {
-        write_bam_tag_u32(buf, b"NH", cols.alignment_count as u32);
+        write_bam_tag_u32(buf, *b"NH", u32::from(cols.alignment_count));
     }
     if !cols.spot_group.is_empty() {
-        write_bam_tag_str(buf, b"RG", &cols.spot_group);
+        write_bam_tag_str(buf, *b"RG", &cols.spot_group);
     }
     if opts.xi_tag {
-        write_bam_tag_i64(buf, b"XI", align_id);
+        write_bam_tag_i64(buf, *b"XI", align_id);
     }
 
     // Fill in block_size.
@@ -782,7 +785,7 @@ fn format_unaligned_record_bam(
 
     // Aux tags.
     if !cols.spot_group.is_empty() {
-        write_bam_tag_str(buf, b"RG", cols.spot_group);
+        write_bam_tag_str(buf, *b"RG", cols.spot_group);
     }
 
     // Fill in block_size.
@@ -798,7 +801,7 @@ fn parse_cigar_to_bam(cigar: &str) -> Vec<u32> {
     let mut num: u32 = 0;
     for b in cigar.bytes() {
         if b.is_ascii_digit() {
-            num = num * 10 + (b - b'0') as u32;
+            num = num * 10 + u32::from(b - b'0');
         } else {
             let code = match b {
                 b'M' => 0,
@@ -948,8 +951,8 @@ fn encode_quality_unaligned(
 }
 
 /// Write a BAM auxiliary tag with an integer value, using the smallest type.
-fn write_bam_tag_u32(buf: &mut Vec<u8>, tag: &[u8; 2], val: u32) {
-    buf.extend_from_slice(tag);
+fn write_bam_tag_u32(buf: &mut Vec<u8>, tag: [u8; 2], val: u32) {
+    buf.extend_from_slice(&tag);
     if val <= 0xFF {
         buf.push(b'C');
         buf.push(val as u8);
@@ -963,8 +966,8 @@ fn write_bam_tag_u32(buf: &mut Vec<u8>, tag: &[u8; 2], val: u32) {
 }
 
 /// Write a BAM auxiliary tag with an i64 value.
-fn write_bam_tag_i64(buf: &mut Vec<u8>, tag: &[u8; 2], val: i64) {
-    buf.extend_from_slice(tag);
+fn write_bam_tag_i64(buf: &mut Vec<u8>, tag: [u8; 2], val: i64) {
+    buf.extend_from_slice(&tag);
     if (0..=0xFF).contains(&val) {
         buf.push(b'C');
         buf.push(val as u8);
@@ -974,7 +977,7 @@ fn write_bam_tag_i64(buf: &mut Vec<u8>, tag: &[u8; 2], val: i64) {
     } else if (0..=0xFFFF_FFFF).contains(&val) {
         buf.push(b'I');
         buf.extend_from_slice(&(val as u32).to_le_bytes());
-    } else if val >= i32::MIN as i64 && val <= i32::MAX as i64 {
+    } else if i32::try_from(val).is_ok() {
         buf.push(b'i');
         buf.extend_from_slice(&(val as i32).to_le_bytes());
     } else {
@@ -986,8 +989,8 @@ fn write_bam_tag_i64(buf: &mut Vec<u8>, tag: &[u8; 2], val: i64) {
 }
 
 /// Write a BAM auxiliary tag with a string value (null-terminated).
-fn write_bam_tag_str(buf: &mut Vec<u8>, tag: &[u8; 2], val: &str) {
-    buf.extend_from_slice(tag);
+fn write_bam_tag_str(buf: &mut Vec<u8>, tag: [u8; 2], val: &str) {
+    buf.extend_from_slice(&tag);
     buf.push(b'Z');
     buf.extend_from_slice(val.as_bytes());
     buf.push(0);
@@ -1546,14 +1549,14 @@ mod tests {
     #[test]
     fn test_write_bam_tag_u32_byte() {
         let mut buf = Vec::new();
-        write_bam_tag_u32(&mut buf, b"NM", 5);
+        write_bam_tag_u32(&mut buf, *b"NM", 5);
         assert_eq!(buf, vec![b'N', b'M', b'C', 5]);
     }
 
     #[test]
     fn test_write_bam_tag_u32_short() {
         let mut buf = Vec::new();
-        write_bam_tag_u32(&mut buf, b"NM", 300);
+        write_bam_tag_u32(&mut buf, *b"NM", 300);
         let mut expected = vec![b'N', b'M', b'S'];
         expected.extend_from_slice(&300u16.to_le_bytes());
         assert_eq!(buf, expected);
@@ -1562,7 +1565,7 @@ mod tests {
     #[test]
     fn test_write_bam_tag_u32_int() {
         let mut buf = Vec::new();
-        write_bam_tag_u32(&mut buf, b"NM", 100_000);
+        write_bam_tag_u32(&mut buf, *b"NM", 100_000);
         let mut expected = vec![b'N', b'M', b'I'];
         expected.extend_from_slice(&100_000u32.to_le_bytes());
         assert_eq!(buf, expected);
@@ -1571,7 +1574,7 @@ mod tests {
     #[test]
     fn test_write_bam_tag_i64_small() {
         let mut buf = Vec::new();
-        write_bam_tag_i64(&mut buf, b"XI", 42);
+        write_bam_tag_i64(&mut buf, *b"XI", 42);
         assert_eq!(buf, vec![b'X', b'I', b'C', 42]);
     }
 
@@ -1579,7 +1582,7 @@ mod tests {
     fn test_write_bam_tag_i64_large() {
         let mut buf = Vec::new();
         let val: i64 = 5_000_000_000; // exceeds u32 max
-        write_bam_tag_i64(&mut buf, b"XI", val);
+        write_bam_tag_i64(&mut buf, *b"XI", val);
         // Falls back to string encoding.
         let mut expected = vec![b'X', b'I', b'Z'];
         expected.extend_from_slice(b"5000000000");
@@ -1590,7 +1593,7 @@ mod tests {
     #[test]
     fn test_write_bam_tag_str() {
         let mut buf = Vec::new();
-        write_bam_tag_str(&mut buf, b"RG", "sample1");
+        write_bam_tag_str(&mut buf, *b"RG", "sample1");
         let mut expected = vec![b'R', b'G', b'Z'];
         expected.extend_from_slice(b"sample1");
         expected.push(0);

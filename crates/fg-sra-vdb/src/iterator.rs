@@ -33,6 +33,7 @@ pub enum AlignIdSrc {
 
 impl AlignIdSrc {
     /// The VDB table name for this alignment source.
+    #[must_use]
     pub fn table_name(self) -> &'static str {
         match self {
             Self::Primary => "PRIMARY_ALIGNMENT",
@@ -55,7 +56,7 @@ impl AlignMgr {
     /// Create a new read-only alignment manager.
     pub fn make_read() -> Result<Self, VdbError> {
         let mut mgr: *const fg_sra_vdb_sys::AlignMgr = ptr::null();
-        let rc = unsafe { fg_sra_vdb_sys::AlignMgrMakeRead(&mut mgr) };
+        let rc = unsafe { fg_sra_vdb_sys::AlignMgrMakeRead(&raw mut mgr) };
         check_rc(rc)?;
         Ok(Self { ptr: mgr })
     }
@@ -63,7 +64,8 @@ impl AlignMgr {
     /// Create a new `PlacementSetIterator`.
     pub fn make_placement_set_iterator(&self) -> Result<PlacementSetIterator, VdbError> {
         let mut iter: *mut fg_sra_vdb_sys::PlacementSetIterator = ptr::null_mut();
-        let rc = unsafe { fg_sra_vdb_sys::AlignMgrMakePlacementSetIterator(self.ptr, &mut iter) };
+        let rc =
+            unsafe { fg_sra_vdb_sys::AlignMgrMakePlacementSetIterator(self.ptr, &raw mut iter) };
         check_rc(rc)?;
         Ok(PlacementSetIterator { ptr: iter })
     }
@@ -127,9 +129,9 @@ impl PlacementSetIterator {
         let rc = unsafe {
             fg_sra_vdb_sys::PlacementSetIteratorNextReference(
                 self.ptr,
-                &mut first_pos,
-                &mut len,
-                &mut ref_obj,
+                &raw mut first_pos,
+                &raw mut len,
+                &raw mut ref_obj,
             )
         };
         match check_rc_done(rc)? {
@@ -145,7 +147,11 @@ impl PlacementSetIterator {
         let mut first_pos: i32 = 0;
         let mut len: u32 = 0;
         let rc = unsafe {
-            fg_sra_vdb_sys::PlacementSetIteratorNextWindow(self.ptr, &mut first_pos, &mut len)
+            fg_sra_vdb_sys::PlacementSetIteratorNextWindow(
+                self.ptr,
+                &raw mut first_pos,
+                &raw mut len,
+            )
         };
         match check_rc_done(rc)? {
             Some(()) => Ok(Some((first_pos, len))),
@@ -160,7 +166,7 @@ impl PlacementSetIterator {
         let mut pos: i32 = 0;
         let mut len: u32 = 0;
         let rc = unsafe {
-            fg_sra_vdb_sys::PlacementSetIteratorNextAvailPos(self.ptr, &mut pos, &mut len)
+            fg_sra_vdb_sys::PlacementSetIteratorNextAvailPos(self.ptr, &raw mut pos, &raw mut len)
         };
         match check_rc_done(rc)? {
             Some(()) => Ok(Some((pos, len))),
@@ -173,8 +179,9 @@ impl PlacementSetIterator {
     /// Returns `Ok(Some(record))` or `Ok(None)` when no more records at this position.
     pub fn next_record_at(&mut self, pos: i32) -> Result<Option<PlacementRecordRef>, VdbError> {
         let mut rec: *const fg_sra_vdb_sys::PlacementRecord = ptr::null();
-        let rc =
-            unsafe { fg_sra_vdb_sys::PlacementSetIteratorNextRecordAt(self.ptr, pos, &mut rec) };
+        let rc = unsafe {
+            fg_sra_vdb_sys::PlacementSetIteratorNextRecordAt(self.ptr, pos, &raw mut rec)
+        };
         match check_rc_done(rc)? {
             Some(()) if rec.is_null() => Ok(None),
             Some(()) => Ok(Some(PlacementRecordRef { ptr: rec })),
@@ -226,27 +233,32 @@ pub struct PlacementRecordRef {
 
 impl PlacementRecordRef {
     /// Get the alignment row ID.
+    #[must_use]
     pub fn id(&self) -> i64 {
         unsafe { (*self.ptr).id }
     }
 
     /// Get the reference position (0-based).
+    #[must_use]
     pub fn pos(&self) -> i32 {
         unsafe { (*self.ptr).pos }
     }
 
     /// Get the alignment length on the reference.
+    #[must_use]
     #[allow(clippy::len_without_is_empty)]
     pub fn len(&self) -> u32 {
         unsafe { (*self.ptr).len }
     }
 
     /// Get the mapping quality.
+    #[must_use]
     pub fn mapq(&self) -> i32 {
         unsafe { (*self.ptr).mapq }
     }
 
     /// Get the spot group (read group) if available.
+    #[must_use]
     pub fn spot_group(&self) -> Option<String> {
         unsafe {
             let rec = &*self.ptr;
@@ -288,11 +300,11 @@ impl PlacementIterator {
         id_src: AlignIdSrc,
     ) -> Result<Self, VdbError> {
         let mut iter: *mut fg_sra_vdb_sys::PlacementIterator = ptr::null_mut();
-        let align_cur_ptr = align_cursor.map(|c| c.as_ptr()).unwrap_or(ptr::null());
+        let align_cur_ptr = align_cursor.map_or(ptr::null(), VCursor::as_ptr);
         let rc = unsafe {
             fg_sra_vdb_sys::ReferenceObj_MakePlacementIterator(
                 ref_obj.as_ptr(),
-                &mut iter,
+                &raw mut iter,
                 ref_window_start,
                 ref_window_len,
                 min_mapq,
